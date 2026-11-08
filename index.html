@@ -1,7 +1,7 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Praline Packing Cell</title>
+<title>Praline Cell Pro</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description" content="Digital twin of an artisan praline packing cell: a delta robot picks pralines from the cooling-tunnel belt into two nests, and two Epson T3-401S SCARA robots inspect each praline and box it by recipe, with interlocks and clearance checks.">
+<meta name="description" content="Praline Cell Pro: a delta robot and two SCARA robots pack artisan pralines inside a guarded aluminium frame, with belt-timing what-if and clearance checks.">
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -186,6 +186,11 @@
   .gantt .legend span.n { font-family: var(--mono); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
   .gantt .note { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
   .gantt .note b { color: var(--ink); }
+  .whatif svg { width: 100%; height: auto; display: block; }
+  .whatif svg text { font: 500 10px var(--mono); fill: var(--muted); }
+  .belt-row { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+  .belt-row input[type="range"] { flex: 1; accent-color: var(--accent); min-width: 0; }
+  .belt-row input[type="number"] { width: 76px; padding: 3px 6px; text-align: right; font: 500 12px var(--mono); background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; color: var(--ink); }
   .joints { display: grid; gap: 7px; }
   .joints h3 { margin: 6px 0 0; font: 600 11px var(--display); letter-spacing: 0.1em; text-transform: uppercase; }
   .joints h3.delta { color: var(--delta); } .joints h3.t3a { color: var(--t3a); } .joints h3.t3b { color: var(--t3b); }
@@ -260,6 +265,7 @@
     <button class="rail-item" type="button" data-panel="gantt-card" data-modes="program"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 5h7v3H4zM9 10h9v3H9zM6 15h5v3H6zM12 20h8"/></svg><span>Timing</span></button>
     <button class="rail-item" type="button" data-panel="joints-card" data-modes="program manual"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="17" r="2"/></svg><span>Joints</span></button>
     <button class="rail-item" type="button" data-panel="report-card" data-modes="program"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg><span>Report</span></button>
+    <button class="rail-item" type="button" data-panel="whatif-card" data-modes="program"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 18h16"/><path d="M4 8h2M10 8h2M16 8h2"/><circle cx="7" cy="8" r="2.2"/><circle cx="14" cy="8" r="2.2"/></svg><span>What-if</span></button>
     <button class="rail-item" type="button" data-panel="jog-card" data-modes="manual"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M21 12l-3-3M21 12l-3 3"/></svg><span>Jog</span></button>
   </nav>
 
@@ -308,6 +314,18 @@
       <dl class="kv" id="report"></dl>
       <div class="btn-row"><button class="btn" id="copy-csv" type="button">Copy trajectory CSV</button></div>
       <p class="small-note" id="copy-note">Delta TCP, both T3 joint sets and the three clearances at 30 Hz.</p>
+    </div>
+
+    <div class="card whatif" id="whatif-card">
+      <h2>What-if <span>belt index</span><button class="close" type="button" aria-label="Close panel">×</button></h2>
+      <label class="belt-row" for="belt-index">Index
+        <input type="range" id="belt-index" min="0.35" max="2.80" step="0.05" value="0.70" aria-label="Belt index time">
+        <input type="number" id="belt-index-n" min="0.35" max="2.80" step="0.05" value="0.70" aria-label="Belt index time, seconds">
+      </label>
+      <dl class="kv" id="whatif-kv"></dl>
+      <div id="whatif-chart"></div>
+      <div class="btn-row"><button class="btn" id="belt-reset" type="button">Reset to 0.70 s</button></div>
+      <p class="small-note">One index moves the belt 75 mm. The cycle, interlocks and clearances are recomputed for the new timing.</p>
     </div>
 
     <div class="card" id="jog-card">
@@ -362,6 +380,8 @@
       </div>
       <label class="toggle"><input type="checkbox" id="loop" checked> Loop</label>
       <label class="toggle"><input type="checkbox" id="trail" checked> Path</label>
+      <label class="toggle"><input type="checkbox" id="guards" checked> Guards</label>
+      <label class="toggle"><input type="checkbox" id="hq"> HQ</label>
     </div>
   </section>
 </div>
@@ -922,9 +942,7 @@ document.addEventListener("change", (e) => {
   if (t && t.id === "hq") setQuality(t.checked);
 });
 
-// The loop in 70-loop.js calls renderer.render until G4 switches it to renderFrame().
-// Passes keep the native call. finalizeProfiles() runs on the first frame.
-const nativeRender = renderer.render.bind(renderer);
+// frame() calls renderFrame(). Passes inside the composer call renderer.render directly.
 let rendering = false;
 let profilesArmed = false;
 let watchT0 = 0, watchLast = 0, watchSum = 0, watchN = 0, watchDone = false;
@@ -950,10 +968,6 @@ function renderFrame() {
   finally { rendering = false; }
   noteFrameTime();
 }
-renderer.render = function (s, c) {
-  if (rendering) return nativeRender(s, c);
-  renderFrame();
-};
 window.setQuality = setQuality;
 const mat = (color, roughness = 0.5, metalness = 0.1, extra = {}) => {
   const physical = (extra.clearcoat > 0) || (extra.transmission > 0) || (extra.sheen > 0);
@@ -2341,6 +2355,18 @@ function pathLine(points, colorVar) {
   world.add(ghost, live); return { ghost, live, colorVar };
 }
 const paths = [pathLine(S.dp, "--delta"), pathLine(S.tp[0], "--t3a"), pathLine(S.tp[1], "--t3b")];
+function rebuildPaths() {
+  const src = [S.dp, S.tp[0], S.tp[1]];
+  paths.forEach((p, i) => {
+    for (const line of [p.ghost, p.live]) {
+      line.geometry.dispose();
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(src[i].flat()), 3));
+      line.geometry = g;
+    }
+    p.live.geometry.setDrawRange(0, 0);
+  });
+}
 
 function applyTheme() {
   const top = new THREE.Color(css("--scene-top")), bottom = new THREE.Color(css("--scene-bottom"));
@@ -2350,6 +2376,7 @@ function applyTheme() {
   g.fillStyle = gr; g.fillRect(0, 0, 2, 256);
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; scene.background = tex;
   floorMat.color.copy(bottom).lerp(top, 0.3);
+  scene.environmentIntensity = themeIsDark() ? 0.5 : 0.7;
   for (const p of paths) { const col = new THREE.Color(css(p.colorVar)); p.ghost.material.color.copy(col); p.live.material.color.copy(col); }
   lastZone = [undefined, undefined];
   drawLanes(); renderGantt();
@@ -2357,14 +2384,15 @@ function applyTheme() {
 
 // ---------------------------------------------------------------- camera views (three.js frame: world (x, y, z) -> (x, z, -y))
 const views = {
-  iso: { pos: V(2.15, 1.65, 2.35), target: V(0.05, 0.28, 0) },
-  front: { pos: V(0.05, 0.75, 3.1), target: V(0.05, 0.32, 0) },
-  side: { pos: V(3.1, 0.75, 0), target: V(0, 0.32, 0) },
-  top: { pos: V(0.02, 3.7, 0.03), target: V(0.02, 0, 0) },
-  delta: { pos: V(0.55, 0.95, 1.55), target: V(0, 0.35, 0) },
-  t3a: { pos: V(1.30, 0.95, 0.12), target: V(0.36, 0.12, 0.26) },
-  t3b: { pos: V(1.30, 0.95, -0.12), target: V(0.36, 0.12, -0.26) },
+  iso: { pos: V(2.7, 2.1, 2.9), target: V(0.05, 0.35, 0) },
+  front: { pos: V(0.05, 1.15, 3.35), target: V(0.05, 0.48, 0) },
+  side: { pos: V(3.35, 1.15, 0.05), target: V(0, 0.48, 0) },
+  top: { pos: V(0.05, 4.2, 0.02), target: V(0.05, 0, 0) },
+  delta: { pos: V(0.62, 1.25, 1.7), target: V(0, 0.55, 0) },
+  t3a: { pos: V(1.45, 1.15, 0.15), target: V(0.40, 0.28, 0.28) },
+  t3b: { pos: V(1.45, 1.15, -0.15), target: V(0.40, 0.28, -0.28) },
 };
+window.pcViews = views;
 let flight = null;
 function setView(name) {
   const v = views[name]; if (!v) return;
@@ -2396,6 +2424,7 @@ function syncPanels() {
   });
   document.querySelectorAll(".drawer .card").forEach((c) => { c.hidden = !openPanels[mode].has(c.id); });
   $("drawer").hidden = openPanels[mode].size === 0;
+  if (openPanels[mode].has("whatif-card")) drawWhatIf();
   requestAnimationFrame(resize);
 }
 document.querySelectorAll(".rail-item[data-panel]").forEach((b) => b.addEventListener("click", () => {
@@ -2411,20 +2440,28 @@ const boxCells = SIDES.map((sd) => RECIPE.map((fl) => {
 }));
 $("flavours").innerHTML = Object.entries(FLAVOURS).map(([k, v]) => `<span><i style="background:var(--${k})"></i>${v}</span>`).join("");
 
-// program list
-const programItems = [];
-for (const a of ACTORS) for (const s of segs[a]) if (s.kind !== "wait") programItems.push({ ...s, actor: a });
-programItems.sort((x, y) => x.t0 - y.t0 || ACTORS.indexOf(x.actor) - ACTORS.indexOf(y.actor));
-$("program-total").textContent = `${programItems.length} steps · ${DURATION.toFixed(1)} s`;
-const programRows = programItems.map((it) => {
-  const li = document.createElement("li"); li.dataset.actor = it.actor;
-  li.innerHTML = `<i class="fill"></i><span class="chip ${it.actor}">${ACTOR_NAME[it.actor]}</span><span class="label"></span><span class="dur">${(it.t1 - it.t0).toFixed(2)} s</span><code></code>`;
-  li.querySelector(".label").textContent = it.label;
-  li.querySelector(".label").insertAdjacentHTML("beforeend", `<small>${it.t0.toFixed(1)}</small>`);
-  li.querySelector("code").textContent = it.cmd;
-  li.addEventListener("click", () => seek(it.t0 + 1e-3));
-  $("program").append(li); return li;
-});
+// program list (rebuilt when the belt index changes)
+let programItems = [];
+let programRows = [];
+function buildProgram() {
+  $("program").replaceChildren();
+  programItems = [];
+  for (const a of ACTORS) for (const s of segs[a]) if (s.kind !== "wait") programItems.push({ ...s, actor: a });
+  programItems.sort((x, y) => x.t0 - y.t0 || ACTORS.indexOf(x.actor) - ACTORS.indexOf(y.actor));
+  $("program-total").textContent = `${programItems.length} steps · ${DURATION.toFixed(1)} s`;
+  programRows = programItems.map((it) => {
+    const li = document.createElement("li"); li.dataset.actor = it.actor;
+    li.innerHTML = `<i class="fill"></i><span class="chip ${it.actor}">${ACTOR_NAME[it.actor]}</span><span class="label"></span><span class="dur">${(it.t1 - it.t0).toFixed(2)} s</span><code></code>`;
+    li.querySelector(".label").textContent = it.label;
+    li.querySelector(".label").insertAdjacentHTML("beforeend", `<small>${it.t0.toFixed(1)}</small>`);
+    li.querySelector("code").textContent = it.cmd;
+    li.addEventListener("click", () => seek(it.t0 + 1e-3));
+    $("program").append(li); return li;
+  });
+  const active = document.querySelector(".filter button[aria-pressed='true']");
+  if (active) programRows.forEach((li) => { li.hidden = active.dataset.actor !== "all" && li.dataset.actor !== active.dataset.actor; });
+}
+buildProgram();
 document.querySelectorAll(".filter button").forEach((b) => b.addEventListener("click", () => {
   document.querySelectorAll(".filter button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
   programRows.forEach((li) => { li.hidden = b.dataset.actor !== "all" && li.dataset.actor !== b.dataset.actor; });
@@ -2432,8 +2469,12 @@ document.querySelectorAll(".filter button").forEach((b) => b.addEventListener("c
 
 // timing stats
 function busy(a) { return segs[a].filter((s) => s.kind !== "wait").reduce((n, s) => n + s.t1 - s.t0, 0); }
-const util = Object.fromEntries(ACTORS.map((a) => [a, busy(a) / DURATION]));
-const good = parts.filter((p) => !p.reject).length;
+let util, good;
+function computeStats() {
+  util = Object.fromEntries(ACTORS.map((a) => [a, busy(a) / DURATION]));
+  good = parts.filter((p) => !p.reject).length;
+}
+computeStats();
 function renderGantt() {
   const W = 330, rowH = 22, top = 8, left = 46, H = top + rowH * ACTORS.length + 24;
   const x = (t) => left + (t / DURATION) * (W - left - 6);
@@ -2484,23 +2525,26 @@ for (const a of ["delta", "t3a", "t3b"]) {
   $("tcp").insertAdjacentHTML("beforeend", `<span class="chip ${a}">${ACTOR_NAME[a]}</span>` + ["x", "y", "z"].map((c) => `<div><small>${c}</small><b id="tcp-${a}-${c}">0</b></div>`).join(""));
 }
 const okClear = (c) => `<span class="${c.m > 0.025 ? "ok" : "warn"}">${(c.m * 1000).toFixed(0)} mm</span> at ${c.at.toFixed(1)} s`;
-const reportRows = [
-  ["Cycle time", `${DURATION.toFixed(1)} s`],
-  ["Pralines in / boxed / rejected", `${N_PARTS} / ${good} / ${N_PARTS - good}`],
-  ["Gift boxes filled", `${Math.floor(good / CAP)} × ${CAP}`],
-  ["Throughput (boxed)", `${(60 * good / DURATION).toFixed(1)} /min · ${Math.round(3600 * good / CAP / DURATION)} boxes/h`],
-  ...PAIRS.map((pr, j) => [`Min. ${pr[0]} ↔ ${pr[1]}`, okClear(minClear[j])]),
-  ["Delta IK over the cycle", ikFail ? `<span class="warn">${ikFail} unreachable samples</span>` : `<span class="ok">all reachable</span>`],
-  ["Delta peak TCP speed", `${peakV.toFixed(2)} m/s`],
-  ["Delta peak shoulder speed", `${(peakW * DEG).toFixed(0)} °/s`],
-  ["Utilisation delta / A / B", `${(util.delta * 100).toFixed(0)} / ${(util.t3a * 100).toFixed(0)} / ${(util.t3b * 100).toFixed(0)} %`],
-  ["Shared zones", "nest A, nest B · Ø180 mm, one mutex each"],
-  ["Box recipe", "3 dark · 3 milk · 2 ruby"],
-  ["Belt top / nest top / box floor", `${B.top * 1000} / ${SIDES[0].nest.top * 1000} / ${BOX.top * 1000} mm`],
-  ["Delta base height", `${D.zb * 1000} mm, arms ${D.RF * 1000} / ${D.RE * 1000}`],
-  ["T3 reach / stroke", `${(T3.L1 + T3.L2) * 1000} / ${T3.stroke * 1000} mm`],
-];
-$("report").innerHTML = reportRows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+function renderReport() {
+  const reportRows = [
+    ["Cycle time", `${DURATION.toFixed(1)} s`],
+    ["Pralines in / boxed / rejected", `${N_PARTS} / ${good} / ${N_PARTS - good}`],
+    ["Gift boxes filled", `${Math.floor(good / CAP)} × ${CAP}`],
+    ["Throughput (boxed)", `${(60 * good / DURATION).toFixed(1)} /min · ${Math.round(3600 * good / CAP / DURATION)} boxes/h`],
+    ...PAIRS.map((pr, j) => [`Min. ${pr[0]} ↔ ${pr[1]}`, okClear(minClear[j])]),
+    ["Delta IK over the cycle", ikFail ? `<span class="warn">${ikFail} unreachable samples</span>` : `<span class="ok">all reachable</span>`],
+    ["Delta peak TCP speed", `${peakV.toFixed(2)} m/s`],
+    ["Delta peak shoulder speed", `${(peakW * DEG).toFixed(0)} °/s`],
+    ["Utilisation delta / A / B", `${(util.delta * 100).toFixed(0)} / ${(util.t3a * 100).toFixed(0)} / ${(util.t3b * 100).toFixed(0)} %`],
+    ["Shared zones", "nest A, nest B · Ø180 mm, one mutex each"],
+    ["Box recipe", "3 dark · 3 milk · 2 ruby"],
+    ["Belt top / nest top / box floor", `${B.top * 1000} / ${SIDES[0].nest.top * 1000} / ${BOX.top * 1000} mm`],
+    ["Delta base height", `${D.zb * 1000} mm, arms ${D.RF * 1000} / ${D.RE * 1000}`],
+    ["T3 reach / stroke", `${(T3.L1 + T3.L2) * 1000} / ${T3.stroke * 1000} mm`],
+  ];
+  $("report").innerHTML = reportRows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+renderReport();
 $("copy-csv").addEventListener("click", () => {
   const j = (p) => ["j1_deg", "j2_deg", "z_mm", "j4_deg"].map((n) => `${p}_${n}`);
   const head = ["t_s", "delta_x_mm", "delta_y_mm", "delta_z_mm", "theta1_deg", "theta2_deg", "theta3_deg", ...j("t3a"), ...j("t3b"), "clear_delta_t3a_mm", "clear_delta_t3b_mm", "clear_t3a_t3b_mm"].join(",");
@@ -2578,6 +2622,100 @@ $("jog-copy").addEventListener("click", () => {
 });
 syncJog();
 let lastJogAng = deltaIK(jog.dp);
+
+// ---------------------------------------------------------------- belt what-if
+const baselineCycle = DURATION;
+let beltCurve = null;
+let beltTimer = 0;
+function snapBelt(v) {
+  const x = clamp(Number(v), BELT.min, BELT.max);
+  if (!Number.isFinite(x)) return BELT.index;
+  const n = Math.round((x - BELT.min) / BELT.step);
+  return Math.round((BELT.min + n * BELT.step) * 1000) / 1000;
+}
+function setBeltInputs(v) {
+  $("belt-index").value = String(v);
+  $("belt-index-n").value = Number(v).toFixed(2);
+}
+function ensureBeltCurve() {
+  if (beltCurve) return;
+  beltCurve = [];
+  const n = Math.round((BELT.max - BELT.min) / BELT.step);
+  for (let i = 0; i <= n; i++) beltCurve.push(cycleFor(Math.round((BELT.min + i * BELT.step) * 1000) / 1000));
+}
+function updateWhatIfKv() {
+  const spec = cycleFor(BELT.index);
+  const avg = 75 / BELT.index;
+  const robots = ["delta", "t3a", "t3b"];
+  const bottleneck = robots.reduce((m, a) => (util[a] > util[m] ? a : m), "delta");
+  const dCycle = DURATION - baselineCycle;
+  const clear = Math.min(...minClear.map((c) => c.m));
+  const rows = [
+    ["Index time", `${BELT.index.toFixed(2)} s`],
+    ["Average speed", `${avg.toFixed(1)} mm/s`],
+    ["Peak speed", `${(1.875 * avg).toFixed(1)} mm/s`],
+    ["Cycle", `${DURATION.toFixed(2)} s (${dCycle >= 0 ? "+" : ""}${dCycle.toFixed(2)} s vs 0.70 s)`],
+    ["Bottleneck", `${ACTOR_LONG[bottleneck]} · ${(util[bottleneck] * 100).toFixed(0)} %`],
+    ["Delta waits for the belt", `${spec.deltaWaitsBelt.toFixed(2)} s`],
+    ["Belt waits for the window", `${spec.beltWaits.toFixed(2)} s`],
+    ["Boxes per hour", `${Math.round(3600 * good / CAP / DURATION)}`],
+    ["Minimum distance", `${(clear * 1000).toFixed(0)} mm`],
+  ];
+  $("whatif-kv").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+function drawWhatIf() {
+  if ($("whatif-card").hidden && !beltCurve) return;
+  ensureBeltCurve();
+  updateWhatIfKv();
+  const W = 330, H = 120, left = 38, right = 10, top = 10, bottom = 22;
+  const ys = beltCurve.map((p) => p.DURATION);
+  const y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const xOf = (t) => left + ((t - BELT.min) / (BELT.max - BELT.min)) * (W - left - right);
+  const yOf = (d) => top + (1 - (d - y0) / (y1 - y0 || 1)) * (H - top - bottom);
+  const line = beltCurve.map((p, i) => `${i ? "L" : "M"}${xOf(p.beltIndex).toFixed(1)},${yOf(p.DURATION).toFixed(1)}`).join(" ");
+  const cx = xOf(BELT.index), cy = yOf(DURATION);
+  const ink = css("--ink"), accent = css("--accent"), grid = css("--line"), muted = css("--muted");
+  $("whatif-chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cycle time against belt index time">
+    <line x1="${left}" y1="${top}" x2="${left}" y2="${H - bottom}" stroke="${grid}"/>
+    <line x1="${left}" y1="${H - bottom}" x2="${W - right}" y2="${H - bottom}" stroke="${grid}"/>
+    <path d="${line}" fill="none" stroke="${accent}" stroke-width="2"/>
+    <line x1="${cx.toFixed(1)}" y1="${top}" x2="${cx.toFixed(1)}" y2="${H - bottom}" stroke="${ink}" stroke-dasharray="3 3"/>
+    <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3.5" fill="${accent}"/>
+    <text x="${left}" y="${top + 9}">${y1.toFixed(0)} s</text>
+    <text x="${left}" y="${H - bottom - 3}">${y0.toFixed(0)} s</text>
+    <text x="${left}" y="${H - 6}" fill="${muted}">${BELT.min.toFixed(2)}</text>
+    <text x="${W - right}" y="${H - 6}" text-anchor="end">${BELT.max.toFixed(2)} s</text>
+  </svg>`;
+}
+function refreshModel(v) {
+  rebuild(snapBelt(v));
+  computeStats();
+  buildProgram();
+  renderGantt();
+  drawLanes();
+  renderReport();
+  $("clock-total").textContent = DURATION.toFixed(1);
+  $("timeline").setAttribute("aria-valuemax", DURATION.toFixed(1));
+  rebuildPaths();
+  buildPartMeshes();
+  time = 0;
+  lastSegs = {};
+  lastBoxSig = "";
+  lastFirstActive = null;
+  lastZone = [undefined, undefined];
+  setBeltInputs(BELT.index);
+  drawWhatIf();
+}
+function queueBelt(raw) {
+  const v = snapBelt(raw);
+  setBeltInputs(v);
+  clearTimeout(beltTimer);
+  beltTimer = setTimeout(() => refreshModel(v), 150);
+}
+$("belt-index").addEventListener("input", () => queueBelt($("belt-index").value));
+$("belt-index-n").addEventListener("change", () => queueBelt($("belt-index-n").value));
+$("belt-reset").addEventListener("click", () => { clearTimeout(beltTimer); refreshModel(BELT.index0); });
+$("guards").addEventListener("change", (e) => { guardPanels.visible = e.target.checked; });
 
 // ---------------------------------------------------------------- playback
 let time = 0, playing = true, speed = 1;
@@ -2713,8 +2851,11 @@ function update(dt) {
 
   const cl = clearances(dPose.p, ang, tPoses[0].q, tPoses[1].q);
   const jMin = cl.reduce((m, c, j) => (c < cl[m] ? j : m), 0);
-  $("s-clear").textContent = Number.isFinite(cl[jMin]) ? Math.round(cl[jMin] * 1000) : "–";
-  $("s-clear").className = cl[jMin] < 0.025 ? "warn" : "";
+  const clearNow = cl[jMin];
+  setStack(Number.isFinite(clearNow) && clearNow < 0.025 ? "alarm" : (mode === "program" && playing ? "run" : "hold"));
+  paintHmi(dt, clearNow);
+  $("s-clear").textContent = Number.isFinite(clearNow) ? Math.round(clearNow * 1000) : "–";
+  $("s-clear").className = clearNow < 0.025 ? "warn" : "";
   $("s-clear-pair").textContent = `${PAIRS[jMin][0]} ↔ ${PAIRS[jMin][1]}`;
   $("s-vac").textContent = dPose.vac ? "On" : "Off";
   SIDES.forEach((sd, i) => {
@@ -2746,10 +2887,48 @@ function showNowManual() {
   });
 }
 
+// ---------------------------------------------------------------- stack lamp and HMI
+let stackState = "";
+function setStack(state) {
+  if (state === stackState) return;
+  stackState = state;
+  stackLamps.green.emissiveIntensity = state === "run" ? 1.5 : 0;
+  stackLamps.amber.emissiveIntensity = state === "hold" ? 1.5 : 0;
+  stackLamps.red.emissiveIntensity = state === "alarm" ? 1.5 : 0;
+}
+let hmiAcc = 0.5;
+function paintHmi(dt, clearM) {
+  hmiAcc += dt;
+  if (hmiAcc < 0.5) return;
+  hmiAcc = 0;
+  const c = hmiScreen.canvas, g = c.getContext("2d");
+  g.fillStyle = "#14181e";
+  g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = "#8fd0c8";
+  g.font = "600 36px sans-serif";
+  g.fillText("PRALINE CELL", 28, 58);
+  const hold = !(mode === "program" && playing);
+  g.fillStyle = hold ? "#e0b15a" : "#7ddea0";
+  g.font = "700 54px sans-serif";
+  g.fillText(hold ? "HOLD" : "RUN", 28, 130);
+  g.fillStyle = "#d7dee6";
+  g.font = "500 28px sans-serif";
+  const lines = [
+    `Cycle   ${time.toFixed(1)} / ${DURATION.toFixed(1)} s`,
+    `Boxes   A ${$("box-a-n").textContent}    B ${$("box-b-n").textContent}`,
+    `Index   ${BELT.index.toFixed(2)} s    ${(75 / BELT.index).toFixed(0)} mm/s`,
+    `Clear   ${Number.isFinite(clearM) ? Math.round(clearM * 1000) : "–"} mm`,
+  ];
+  lines.forEach((line, i) => g.fillText(line, 28, 190 + i * 44));
+  hmiScreen.texture.needsUpdate = true;
+}
+
 // ---------------------------------------------------------------- loop
-const clock = new THREE.Clock();
+const timer = new THREE.Timer();
+timer.connect(document);
 function frame() {
-  const dt = Math.min(clock.getDelta(), 0.1);
+  timer.update();
+  const dt = Math.min(timer.getDelta(), 0.1);
   if (flight) {
     flight.t = Math.min(1, flight.t + dt / 0.8); const e = ease(flight.t);
     camera.position.lerpVectors(flight.fromP, flight.toP, e); controls.target.lerpVectors(flight.fromT, flight.toT, e);
@@ -2757,14 +2936,30 @@ function frame() {
   }
   update(dt);
   controls.update();
-  renderer.render(scene, camera);
+  renderFrame();
   requestAnimationFrame(frame);
 }
 window.addEventListener("themechange", applyTheme);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
 syncPanels(); resize(); applyTheme(); setPlaying(true);
 // hooks for recording and checks: pc.seek(t), pc.pause()
-window.pc = { segs, parts, zones, DURATION, minClear, ikFail, S, seek: (t) => { time = clamp(t, 0, DURATION); }, pause: () => setPlaying(false), play: () => setPlaying(true), setView };
+window.pc = {
+  get segs() { return segs; },
+  get parts() { return parts; },
+  get zones() { return zones; },
+  get DURATION() { return DURATION; },
+  get minClear() { return minClear; },
+  get ikFail() { return ikFail; },
+  get S() { return S; },
+  seek, pause: () => setPlaying(false), play: () => setPlaying(true), setView, setBelt: refreshModel,
+  setCamera: (pos, target) => {
+    flight = null;
+    camera.position.set(pos[0], pos[1], pos[2]);
+    controls.target.set(target[0], target[1], target[2]);
+    controls.update();
+  },
+  ...(window.pcHooks || {}),
+};
 window.pcReady = true;
 requestAnimationFrame(frame);
 </script>

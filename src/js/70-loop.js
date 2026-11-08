@@ -132,8 +132,11 @@ function update(dt) {
 
   const cl = clearances(dPose.p, ang, tPoses[0].q, tPoses[1].q);
   const jMin = cl.reduce((m, c, j) => (c < cl[m] ? j : m), 0);
-  $("s-clear").textContent = Number.isFinite(cl[jMin]) ? Math.round(cl[jMin] * 1000) : "–";
-  $("s-clear").className = cl[jMin] < 0.025 ? "warn" : "";
+  const clearNow = cl[jMin];
+  setStack(Number.isFinite(clearNow) && clearNow < 0.025 ? "alarm" : (mode === "program" && playing ? "run" : "hold"));
+  paintHmi(dt, clearNow);
+  $("s-clear").textContent = Number.isFinite(clearNow) ? Math.round(clearNow * 1000) : "–";
+  $("s-clear").className = clearNow < 0.025 ? "warn" : "";
   $("s-clear-pair").textContent = `${PAIRS[jMin][0]} ↔ ${PAIRS[jMin][1]}`;
   $("s-vac").textContent = dPose.vac ? "On" : "Off";
   SIDES.forEach((sd, i) => {
@@ -165,10 +168,48 @@ function showNowManual() {
   });
 }
 
+// ---------------------------------------------------------------- stack lamp and HMI
+let stackState = "";
+function setStack(state) {
+  if (state === stackState) return;
+  stackState = state;
+  stackLamps.green.emissiveIntensity = state === "run" ? 1.5 : 0;
+  stackLamps.amber.emissiveIntensity = state === "hold" ? 1.5 : 0;
+  stackLamps.red.emissiveIntensity = state === "alarm" ? 1.5 : 0;
+}
+let hmiAcc = 0.5;
+function paintHmi(dt, clearM) {
+  hmiAcc += dt;
+  if (hmiAcc < 0.5) return;
+  hmiAcc = 0;
+  const c = hmiScreen.canvas, g = c.getContext("2d");
+  g.fillStyle = "#14181e";
+  g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = "#8fd0c8";
+  g.font = "600 36px sans-serif";
+  g.fillText("PRALINE CELL", 28, 58);
+  const hold = !(mode === "program" && playing);
+  g.fillStyle = hold ? "#e0b15a" : "#7ddea0";
+  g.font = "700 54px sans-serif";
+  g.fillText(hold ? "HOLD" : "RUN", 28, 130);
+  g.fillStyle = "#d7dee6";
+  g.font = "500 28px sans-serif";
+  const lines = [
+    `Cycle   ${time.toFixed(1)} / ${DURATION.toFixed(1)} s`,
+    `Boxes   A ${$("box-a-n").textContent}    B ${$("box-b-n").textContent}`,
+    `Index   ${BELT.index.toFixed(2)} s    ${(75 / BELT.index).toFixed(0)} mm/s`,
+    `Clear   ${Number.isFinite(clearM) ? Math.round(clearM * 1000) : "–"} mm`,
+  ];
+  lines.forEach((line, i) => g.fillText(line, 28, 190 + i * 44));
+  hmiScreen.texture.needsUpdate = true;
+}
+
 // ---------------------------------------------------------------- loop
-const clock = new THREE.Clock();
+const timer = new THREE.Timer();
+timer.connect(document);
 function frame() {
-  const dt = Math.min(clock.getDelta(), 0.1);
+  timer.update();
+  const dt = Math.min(timer.getDelta(), 0.1);
   if (flight) {
     flight.t = Math.min(1, flight.t + dt / 0.8); const e = ease(flight.t);
     camera.position.lerpVectors(flight.fromP, flight.toP, e); controls.target.lerpVectors(flight.fromT, flight.toT, e);
@@ -176,13 +217,29 @@ function frame() {
   }
   update(dt);
   controls.update();
-  renderer.render(scene, camera);
+  renderFrame();
   requestAnimationFrame(frame);
 }
 window.addEventListener("themechange", applyTheme);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
 syncPanels(); resize(); applyTheme(); setPlaying(true);
 // hooks for recording and checks: pc.seek(t), pc.pause()
-window.pc = { segs, parts, zones, DURATION, minClear, ikFail, S, seek: (t) => { time = clamp(t, 0, DURATION); }, pause: () => setPlaying(false), play: () => setPlaying(true), setView };
+window.pc = {
+  get segs() { return segs; },
+  get parts() { return parts; },
+  get zones() { return zones; },
+  get DURATION() { return DURATION; },
+  get minClear() { return minClear; },
+  get ikFail() { return ikFail; },
+  get S() { return S; },
+  seek, pause: () => setPlaying(false), play: () => setPlaying(true), setView, setBelt: refreshModel,
+  setCamera: (pos, target) => {
+    flight = null;
+    camera.position.set(pos[0], pos[1], pos[2]);
+    controls.target.set(target[0], target[1], target[2]);
+    controls.update();
+  },
+  ...(window.pcHooks || {}),
+};
 window.pcReady = true;
 requestAnimationFrame(frame);

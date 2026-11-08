@@ -1,7 +1,7 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Praline Packing Cell</title>
+<title>Praline Cell Pro</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description" content="Digital twin of an artisan praline packing cell: a delta robot picks pralines from the cooling-tunnel belt into two nests, and two Epson T3-401S SCARA robots inspect each praline and box it by recipe, with interlocks and clearance checks.">
+<meta name="description" content="Praline Cell Pro: a delta robot and two SCARA robots pack artisan pralines inside a guarded aluminium frame, with belt-timing what-if and clearance checks.">
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -186,6 +186,11 @@
   .gantt .legend span.n { font-family: var(--mono); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
   .gantt .note { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
   .gantt .note b { color: var(--ink); }
+  .whatif svg { width: 100%; height: auto; display: block; }
+  .whatif svg text { font: 500 10px var(--mono); fill: var(--muted); }
+  .belt-row { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+  .belt-row input[type="range"] { flex: 1; accent-color: var(--accent); min-width: 0; }
+  .belt-row input[type="number"] { width: 76px; padding: 3px 6px; text-align: right; font: 500 12px var(--mono); background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; color: var(--ink); }
   .joints { display: grid; gap: 7px; }
   .joints h3 { margin: 6px 0 0; font: 600 11px var(--display); letter-spacing: 0.1em; text-transform: uppercase; }
   .joints h3.delta { color: var(--delta); } .joints h3.t3a { color: var(--t3a); } .joints h3.t3b { color: var(--t3b); }
@@ -260,6 +265,7 @@
     <button class="rail-item" type="button" data-panel="gantt-card" data-modes="program"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 5h7v3H4zM9 10h9v3H9zM6 15h5v3H6zM12 20h8"/></svg><span>Timing</span></button>
     <button class="rail-item" type="button" data-panel="joints-card" data-modes="program manual"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="17" r="2"/></svg><span>Joints</span></button>
     <button class="rail-item" type="button" data-panel="report-card" data-modes="program"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg><span>Report</span></button>
+    <button class="rail-item" type="button" data-panel="whatif-card" data-modes="program"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 18h16"/><path d="M4 8h2M10 8h2M16 8h2"/><circle cx="7" cy="8" r="2.2"/><circle cx="14" cy="8" r="2.2"/></svg><span>What-if</span></button>
     <button class="rail-item" type="button" data-panel="jog-card" data-modes="manual"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M21 12l-3-3M21 12l-3 3"/></svg><span>Jog</span></button>
   </nav>
 
@@ -308,6 +314,18 @@
       <dl class="kv" id="report"></dl>
       <div class="btn-row"><button class="btn" id="copy-csv" type="button">Copy trajectory CSV</button></div>
       <p class="small-note" id="copy-note">Delta TCP, both T3 joint sets and the three clearances at 30 Hz.</p>
+    </div>
+
+    <div class="card whatif" id="whatif-card">
+      <h2>What-if <span>belt index</span><button class="close" type="button" aria-label="Close panel">×</button></h2>
+      <label class="belt-row" for="belt-index">Index
+        <input type="range" id="belt-index" min="0.35" max="2.80" step="0.05" value="0.70" aria-label="Belt index time">
+        <input type="number" id="belt-index-n" min="0.35" max="2.80" step="0.05" value="0.70" aria-label="Belt index time, seconds">
+      </label>
+      <dl class="kv" id="whatif-kv"></dl>
+      <div id="whatif-chart"></div>
+      <div class="btn-row"><button class="btn" id="belt-reset" type="button">Reset to 0.70 s</button></div>
+      <p class="small-note">One index moves the belt 75 mm. The cycle, interlocks and clearances are recomputed for the new timing.</p>
     </div>
 
     <div class="card" id="jog-card">
@@ -362,6 +380,8 @@
       </div>
       <label class="toggle"><input type="checkbox" id="loop" checked> Loop</label>
       <label class="toggle"><input type="checkbox" id="trail" checked> Path</label>
+      <label class="toggle"><input type="checkbox" id="guards" checked> Guards</label>
+      <label class="toggle"><input type="checkbox" id="hq"> HQ</label>
     </div>
   </section>
 </div>

@@ -6,6 +6,18 @@ function pathLine(points, colorVar) {
   world.add(ghost, live); return { ghost, live, colorVar };
 }
 const paths = [pathLine(S.dp, "--delta"), pathLine(S.tp[0], "--t3a"), pathLine(S.tp[1], "--t3b")];
+function rebuildPaths() {
+  const src = [S.dp, S.tp[0], S.tp[1]];
+  paths.forEach((p, i) => {
+    for (const line of [p.ghost, p.live]) {
+      line.geometry.dispose();
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(src[i].flat()), 3));
+      line.geometry = g;
+    }
+    p.live.geometry.setDrawRange(0, 0);
+  });
+}
 
 function applyTheme() {
   const top = new THREE.Color(css("--scene-top")), bottom = new THREE.Color(css("--scene-bottom"));
@@ -15,6 +27,7 @@ function applyTheme() {
   g.fillStyle = gr; g.fillRect(0, 0, 2, 256);
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; scene.background = tex;
   floorMat.color.copy(bottom).lerp(top, 0.3);
+  scene.environmentIntensity = themeIsDark() ? 0.5 : 0.7;
   for (const p of paths) { const col = new THREE.Color(css(p.colorVar)); p.ghost.material.color.copy(col); p.live.material.color.copy(col); }
   lastZone = [undefined, undefined];
   drawLanes(); renderGantt();
@@ -22,14 +35,15 @@ function applyTheme() {
 
 // ---------------------------------------------------------------- camera views (three.js frame: world (x, y, z) -> (x, z, -y))
 const views = {
-  iso: { pos: V(2.15, 1.65, 2.35), target: V(0.05, 0.28, 0) },
-  front: { pos: V(0.05, 0.75, 3.1), target: V(0.05, 0.32, 0) },
-  side: { pos: V(3.1, 0.75, 0), target: V(0, 0.32, 0) },
-  top: { pos: V(0.02, 3.7, 0.03), target: V(0.02, 0, 0) },
-  delta: { pos: V(0.55, 0.95, 1.55), target: V(0, 0.35, 0) },
-  t3a: { pos: V(1.30, 0.95, 0.12), target: V(0.36, 0.12, 0.26) },
-  t3b: { pos: V(1.30, 0.95, -0.12), target: V(0.36, 0.12, -0.26) },
+  iso: { pos: V(2.7, 2.1, 2.9), target: V(0.05, 0.35, 0) },
+  front: { pos: V(0.05, 1.15, 3.35), target: V(0.05, 0.48, 0) },
+  side: { pos: V(3.35, 1.15, 0.05), target: V(0, 0.48, 0) },
+  top: { pos: V(0.05, 4.2, 0.02), target: V(0.05, 0, 0) },
+  delta: { pos: V(0.62, 1.25, 1.7), target: V(0, 0.55, 0) },
+  t3a: { pos: V(1.45, 1.15, 0.15), target: V(0.40, 0.28, 0.28) },
+  t3b: { pos: V(1.45, 1.15, -0.15), target: V(0.40, 0.28, -0.28) },
 };
+window.pcViews = views;
 let flight = null;
 function setView(name) {
   const v = views[name]; if (!v) return;

@@ -148,9 +148,7 @@ document.addEventListener("change", (e) => {
   if (t && t.id === "hq") setQuality(t.checked);
 });
 
-// The loop in 70-loop.js calls renderer.render until G4 switches it to renderFrame().
-// Passes keep the native call. finalizeProfiles() runs on the first frame.
-const nativeRender = renderer.render.bind(renderer);
+// frame() calls renderFrame(). Passes inside the composer call renderer.render directly.
 let rendering = false;
 let profilesArmed = false;
 let watchT0 = 0, watchLast = 0, watchSum = 0, watchN = 0, watchDone = false;
@@ -176,8 +174,4 @@ function renderFrame() {
   finally { rendering = false; }
   noteFrameTime();
 }
-renderer.render = function (s, c) {
-  if (rendering) return nativeRender(s, c);
-  renderFrame();
-};
 window.setQuality = setQuality;

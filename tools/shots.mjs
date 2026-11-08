@@ -88,6 +88,54 @@ try {
     console.log(file);
   }
 
+  await page.evaluate(() => {
+    document.querySelectorAll(".rail-item[data-panel]").forEach((b) => {
+      const open = b.getAttribute("aria-pressed") === "true";
+      const want = b.dataset.panel === "whatif-card";
+      if (open !== want) b.click();
+    });
+    window.pc.pause();
+    window.pc.setView("iso");
+    window.pc.setBelt(1.80);
+  });
+  const belt180 = await page.evaluate(() => ({
+    duration: window.pc.DURATION,
+    steps: document.getElementById("program-total").textContent,
+    chart: document.getElementById("whatif-chart").querySelector("svg") != null,
+  }));
+  console.log("setBelt 1.80", belt180.duration.toFixed(2), belt180.steps, "chart", belt180.chart);
+  if (Math.abs(belt180.duration - 49.56) > 0.02 || !belt180.chart) {
+    errors.push(`setBelt(1.80) duration ${belt180.duration} chart ${belt180.chart}`);
+  }
+  await page.waitForTimeout(400);
+  const whatif = join(outDir, "whatif_1.80.png");
+  await page.screenshot({ path: whatif });
+  console.log(whatif);
+
+  await page.evaluate(() => window.pc.setBelt(0.70));
+  const belt070 = await page.evaluate(() => window.pc.DURATION);
+  console.log("setBelt 0.70", belt070.toFixed(2));
+  if (Math.abs(belt070 - 42.51) > 0.02) errors.push(`setBelt(0.70) duration ${belt070}`);
+
+  await page.evaluate(() => {
+    window.pc.setView("iso");
+    window.pc.seek(12);
+    document.getElementById("guards").checked = false;
+    document.getElementById("guards").dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await page.waitForTimeout(300);
+  const guardsOff = join(outDir, "guards_off_12.0.png");
+  await page.screenshot({ path: guardsOff });
+  console.log(guardsOff);
+  await page.evaluate(() => {
+    document.getElementById("guards").checked = true;
+    document.getElementById("guards").dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await page.waitForTimeout(300);
+  const guardsOn = join(outDir, "guards_on_12.0.png");
+  await page.screenshot({ path: guardsOn });
+  console.log(guardsOn);
+
   const checks = await page.evaluate(() => ({
     t3: window.pc.t3Check?.() ?? null,
     delta: window.pc.deltaCheck?.() ?? null,

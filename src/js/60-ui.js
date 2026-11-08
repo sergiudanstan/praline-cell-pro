@@ -14,6 +14,7 @@ function syncPanels() {
   });
   document.querySelectorAll(".drawer .card").forEach((c) => { c.hidden = !openPanels[mode].has(c.id); });
   $("drawer").hidden = openPanels[mode].size === 0;
+  if (openPanels[mode].has("whatif-card")) drawWhatIf();
   requestAnimationFrame(resize);
 }
 document.querySelectorAll(".rail-item[data-panel]").forEach((b) => b.addEventListener("click", () => {
@@ -29,20 +30,28 @@ const boxCells = SIDES.map((sd) => RECIPE.map((fl) => {
 }));
 $("flavours").innerHTML = Object.entries(FLAVOURS).map(([k, v]) => `<span><i style="background:var(--${k})"></i>${v}</span>`).join("");
 
-// program list
-const programItems = [];
-for (const a of ACTORS) for (const s of segs[a]) if (s.kind !== "wait") programItems.push({ ...s, actor: a });
-programItems.sort((x, y) => x.t0 - y.t0 || ACTORS.indexOf(x.actor) - ACTORS.indexOf(y.actor));
-$("program-total").textContent = `${programItems.length} steps · ${DURATION.toFixed(1)} s`;
-const programRows = programItems.map((it) => {
-  const li = document.createElement("li"); li.dataset.actor = it.actor;
-  li.innerHTML = `<i class="fill"></i><span class="chip ${it.actor}">${ACTOR_NAME[it.actor]}</span><span class="label"></span><span class="dur">${(it.t1 - it.t0).toFixed(2)} s</span><code></code>`;
-  li.querySelector(".label").textContent = it.label;
-  li.querySelector(".label").insertAdjacentHTML("beforeend", `<small>${it.t0.toFixed(1)}</small>`);
-  li.querySelector("code").textContent = it.cmd;
-  li.addEventListener("click", () => seek(it.t0 + 1e-3));
-  $("program").append(li); return li;
-});
+// program list (rebuilt when the belt index changes)
+let programItems = [];
+let programRows = [];
+function buildProgram() {
+  $("program").replaceChildren();
+  programItems = [];
+  for (const a of ACTORS) for (const s of segs[a]) if (s.kind !== "wait") programItems.push({ ...s, actor: a });
+  programItems.sort((x, y) => x.t0 - y.t0 || ACTORS.indexOf(x.actor) - ACTORS.indexOf(y.actor));
+  $("program-total").textContent = `${programItems.length} steps · ${DURATION.toFixed(1)} s`;
+  programRows = programItems.map((it) => {
+    const li = document.createElement("li"); li.dataset.actor = it.actor;
+    li.innerHTML = `<i class="fill"></i><span class="chip ${it.actor}">${ACTOR_NAME[it.actor]}</span><span class="label"></span><span class="dur">${(it.t1 - it.t0).toFixed(2)} s</span><code></code>`;
+    li.querySelector(".label").textContent = it.label;
+    li.querySelector(".label").insertAdjacentHTML("beforeend", `<small>${it.t0.toFixed(1)}</small>`);
+    li.querySelector("code").textContent = it.cmd;
+    li.addEventListener("click", () => seek(it.t0 + 1e-3));
+    $("program").append(li); return li;
+  });
+  const active = document.querySelector(".filter button[aria-pressed='true']");
+  if (active) programRows.forEach((li) => { li.hidden = active.dataset.actor !== "all" && li.dataset.actor !== active.dataset.actor; });
+}
+buildProgram();
 document.querySelectorAll(".filter button").forEach((b) => b.addEventListener("click", () => {
   document.querySelectorAll(".filter button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
   programRows.forEach((li) => { li.hidden = b.dataset.actor !== "all" && li.dataset.actor !== b.dataset.actor; });
@@ -50,8 +59,12 @@ document.querySelectorAll(".filter button").forEach((b) => b.addEventListener("c
 
 // timing stats
 function busy(a) { return segs[a].filter((s) => s.kind !== "wait").reduce((n, s) => n + s.t1 - s.t0, 0); }
-const util = Object.fromEntries(ACTORS.map((a) => [a, busy(a) / DURATION]));
-const good = parts.filter((p) => !p.reject).length;
+let util, good;
+function computeStats() {
+  util = Object.fromEntries(ACTORS.map((a) => [a, busy(a) / DURATION]));
+  good = parts.filter((p) => !p.reject).length;
+}
+computeStats();
 function renderGantt() {
   const W = 330, rowH = 22, top = 8, left = 46, H = top + rowH * ACTORS.length + 24;
   const x = (t) => left + (t / DURATION) * (W - left - 6);
@@ -102,23 +115,26 @@ for (const a of ["delta", "t3a", "t3b"]) {
   $("tcp").insertAdjacentHTML("beforeend", `<span class="chip ${a}">${ACTOR_NAME[a]}</span>` + ["x", "y", "z"].map((c) => `<div><small>${c}</small><b id="tcp-${a}-${c}">0</b></div>`).join(""));
 }
 const okClear = (c) => `<span class="${c.m > 0.025 ? "ok" : "warn"}">${(c.m * 1000).toFixed(0)} mm</span> at ${c.at.toFixed(1)} s`;
-const reportRows = [
-  ["Cycle time", `${DURATION.toFixed(1)} s`],
-  ["Pralines in / boxed / rejected", `${N_PARTS} / ${good} / ${N_PARTS - good}`],
-  ["Gift boxes filled", `${Math.floor(good / CAP)} × ${CAP}`],
-  ["Throughput (boxed)", `${(60 * good / DURATION).toFixed(1)} /min · ${Math.round(3600 * good / CAP / DURATION)} boxes/h`],
-  ...PAIRS.map((pr, j) => [`Min. ${pr[0]} ↔ ${pr[1]}`, okClear(minClear[j])]),
-  ["Delta IK over the cycle", ikFail ? `<span class="warn">${ikFail} unreachable samples</span>` : `<span class="ok">all reachable</span>`],
-  ["Delta peak TCP speed", `${peakV.toFixed(2)} m/s`],
-  ["Delta peak shoulder speed", `${(peakW * DEG).toFixed(0)} °/s`],
-  ["Utilisation delta / A / B", `${(util.delta * 100).toFixed(0)} / ${(util.t3a * 100).toFixed(0)} / ${(util.t3b * 100).toFixed(0)} %`],
-  ["Shared zones", "nest A, nest B · Ø180 mm, one mutex each"],
-  ["Box recipe", "3 dark · 3 milk · 2 ruby"],
-  ["Belt top / nest top / box floor", `${B.top * 1000} / ${SIDES[0].nest.top * 1000} / ${BOX.top * 1000} mm`],
-  ["Delta base height", `${D.zb * 1000} mm, arms ${D.RF * 1000} / ${D.RE * 1000}`],
-  ["T3 reach / stroke", `${(T3.L1 + T3.L2) * 1000} / ${T3.stroke * 1000} mm`],
-];
-$("report").innerHTML = reportRows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+function renderReport() {
+  const reportRows = [
+    ["Cycle time", `${DURATION.toFixed(1)} s`],
+    ["Pralines in / boxed / rejected", `${N_PARTS} / ${good} / ${N_PARTS - good}`],
+    ["Gift boxes filled", `${Math.floor(good / CAP)} × ${CAP}`],
+    ["Throughput (boxed)", `${(60 * good / DURATION).toFixed(1)} /min · ${Math.round(3600 * good / CAP / DURATION)} boxes/h`],
+    ...PAIRS.map((pr, j) => [`Min. ${pr[0]} ↔ ${pr[1]}`, okClear(minClear[j])]),
+    ["Delta IK over the cycle", ikFail ? `<span class="warn">${ikFail} unreachable samples</span>` : `<span class="ok">all reachable</span>`],
+    ["Delta peak TCP speed", `${peakV.toFixed(2)} m/s`],
+    ["Delta peak shoulder speed", `${(peakW * DEG).toFixed(0)} °/s`],
+    ["Utilisation delta / A / B", `${(util.delta * 100).toFixed(0)} / ${(util.t3a * 100).toFixed(0)} / ${(util.t3b * 100).toFixed(0)} %`],
+    ["Shared zones", "nest A, nest B · Ø180 mm, one mutex each"],
+    ["Box recipe", "3 dark · 3 milk · 2 ruby"],
+    ["Belt top / nest top / box floor", `${B.top * 1000} / ${SIDES[0].nest.top * 1000} / ${BOX.top * 1000} mm`],
+    ["Delta base height", `${D.zb * 1000} mm, arms ${D.RF * 1000} / ${D.RE * 1000}`],
+    ["T3 reach / stroke", `${(T3.L1 + T3.L2) * 1000} / ${T3.stroke * 1000} mm`],
+  ];
+  $("report").innerHTML = reportRows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+renderReport();
 $("copy-csv").addEventListener("click", () => {
   const j = (p) => ["j1_deg", "j2_deg", "z_mm", "j4_deg"].map((n) => `${p}_${n}`);
   const head = ["t_s", "delta_x_mm", "delta_y_mm", "delta_z_mm", "theta1_deg", "theta2_deg", "theta3_deg", ...j("t3a"), ...j("t3b"), "clear_delta_t3a_mm", "clear_delta_t3b_mm", "clear_t3a_t3b_mm"].join(",");
@@ -196,4 +212,98 @@ $("jog-copy").addEventListener("click", () => {
 });
 syncJog();
 let lastJogAng = deltaIK(jog.dp);
+
+// ---------------------------------------------------------------- belt what-if
+const baselineCycle = DURATION;
+let beltCurve = null;
+let beltTimer = 0;
+function snapBelt(v) {
+  const x = clamp(Number(v), BELT.min, BELT.max);
+  if (!Number.isFinite(x)) return BELT.index;
+  const n = Math.round((x - BELT.min) / BELT.step);
+  return Math.round((BELT.min + n * BELT.step) * 1000) / 1000;
+}
+function setBeltInputs(v) {
+  $("belt-index").value = String(v);
+  $("belt-index-n").value = Number(v).toFixed(2);
+}
+function ensureBeltCurve() {
+  if (beltCurve) return;
+  beltCurve = [];
+  const n = Math.round((BELT.max - BELT.min) / BELT.step);
+  for (let i = 0; i <= n; i++) beltCurve.push(cycleFor(Math.round((BELT.min + i * BELT.step) * 1000) / 1000));
+}
+function updateWhatIfKv() {
+  const spec = cycleFor(BELT.index);
+  const avg = 75 / BELT.index;
+  const robots = ["delta", "t3a", "t3b"];
+  const bottleneck = robots.reduce((m, a) => (util[a] > util[m] ? a : m), "delta");
+  const dCycle = DURATION - baselineCycle;
+  const clear = Math.min(...minClear.map((c) => c.m));
+  const rows = [
+    ["Index time", `${BELT.index.toFixed(2)} s`],
+    ["Average speed", `${avg.toFixed(1)} mm/s`],
+    ["Peak speed", `${(1.875 * avg).toFixed(1)} mm/s`],
+    ["Cycle", `${DURATION.toFixed(2)} s (${dCycle >= 0 ? "+" : ""}${dCycle.toFixed(2)} s vs 0.70 s)`],
+    ["Bottleneck", `${ACTOR_LONG[bottleneck]} · ${(util[bottleneck] * 100).toFixed(0)} %`],
+    ["Delta waits for the belt", `${spec.deltaWaitsBelt.toFixed(2)} s`],
+    ["Belt waits for the window", `${spec.beltWaits.toFixed(2)} s`],
+    ["Boxes per hour", `${Math.round(3600 * good / CAP / DURATION)}`],
+    ["Minimum distance", `${(clear * 1000).toFixed(0)} mm`],
+  ];
+  $("whatif-kv").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+function drawWhatIf() {
+  if ($("whatif-card").hidden && !beltCurve) return;
+  ensureBeltCurve();
+  updateWhatIfKv();
+  const W = 330, H = 120, left = 38, right = 10, top = 10, bottom = 22;
+  const ys = beltCurve.map((p) => p.DURATION);
+  const y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const xOf = (t) => left + ((t - BELT.min) / (BELT.max - BELT.min)) * (W - left - right);
+  const yOf = (d) => top + (1 - (d - y0) / (y1 - y0 || 1)) * (H - top - bottom);
+  const line = beltCurve.map((p, i) => `${i ? "L" : "M"}${xOf(p.beltIndex).toFixed(1)},${yOf(p.DURATION).toFixed(1)}`).join(" ");
+  const cx = xOf(BELT.index), cy = yOf(DURATION);
+  const ink = css("--ink"), accent = css("--accent"), grid = css("--line"), muted = css("--muted");
+  $("whatif-chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cycle time against belt index time">
+    <line x1="${left}" y1="${top}" x2="${left}" y2="${H - bottom}" stroke="${grid}"/>
+    <line x1="${left}" y1="${H - bottom}" x2="${W - right}" y2="${H - bottom}" stroke="${grid}"/>
+    <path d="${line}" fill="none" stroke="${accent}" stroke-width="2"/>
+    <line x1="${cx.toFixed(1)}" y1="${top}" x2="${cx.toFixed(1)}" y2="${H - bottom}" stroke="${ink}" stroke-dasharray="3 3"/>
+    <circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3.5" fill="${accent}"/>
+    <text x="${left}" y="${top + 9}">${y1.toFixed(0)} s</text>
+    <text x="${left}" y="${H - bottom - 3}">${y0.toFixed(0)} s</text>
+    <text x="${left}" y="${H - 6}" fill="${muted}">${BELT.min.toFixed(2)}</text>
+    <text x="${W - right}" y="${H - 6}" text-anchor="end">${BELT.max.toFixed(2)} s</text>
+  </svg>`;
+}
+function refreshModel(v) {
+  rebuild(snapBelt(v));
+  computeStats();
+  buildProgram();
+  renderGantt();
+  drawLanes();
+  renderReport();
+  $("clock-total").textContent = DURATION.toFixed(1);
+  $("timeline").setAttribute("aria-valuemax", DURATION.toFixed(1));
+  rebuildPaths();
+  buildPartMeshes();
+  time = 0;
+  lastSegs = {};
+  lastBoxSig = "";
+  lastFirstActive = null;
+  lastZone = [undefined, undefined];
+  setBeltInputs(BELT.index);
+  drawWhatIf();
+}
+function queueBelt(raw) {
+  const v = snapBelt(raw);
+  setBeltInputs(v);
+  clearTimeout(beltTimer);
+  beltTimer = setTimeout(() => refreshModel(v), 150);
+}
+$("belt-index").addEventListener("input", () => queueBelt($("belt-index").value));
+$("belt-index-n").addEventListener("change", () => queueBelt($("belt-index-n").value));
+$("belt-reset").addEventListener("click", () => { clearTimeout(beltTimer); refreshModel(BELT.index0); });
+$("guards").addEventListener("change", (e) => { guardPanels.visible = e.target.checked; });
 
