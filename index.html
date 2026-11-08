@@ -976,16 +976,13 @@ const mat = (color, roughness = 0.5, metalness = 0.1, extra = {}) => {
 };
 const phys = (color, roughness, metalness, extra = {}) => new THREE.MeshPhysicalMaterial({ color, roughness, metalness, ...extra });
 
-// Old keys stay until the last old builder is replaced (cleanup at the end). aluDark, steel and t3Dark
-// are overwritten below with the hi-fi values; the names the old builders still use are the ones in §4.2b.
+// aluDark, steel and t3Dark are overwritten below with the hi-fi values. lens and glass stay in use.
 const M = {
-  alu: mat(0xc3c8ce, 0.35, 0.7), aluDark: mat(0x9aa1a8, 0.4, 0.7), table: mat(0xb4b9bf, 0.5, 0.6), top: mat(0xdfe2e5, 0.32, 0.75),
-  black: mat(0x26292d, 0.55, 0.3), carbon: mat(0x1d1f22, 0.35, 0.4), white: mat(0xf4f4f2, 0.5, 0.0),
-  deltaArm: mat(0x6c7a86, 0.35, 0.6), deltaPlate: mat(0xb0b7bf, 0.3, 0.75), steel: mat(0xd2d6db, 0.22, 0.85),
-  t3: mat(0xeceeef, 0.42, 0.05), t3Dark: mat(0x3b4046, 0.5, 0.2), silicone: mat(0x3d8fd0, 0.7, 0.0),
-  bin: mat(0xd3d7db, 0.35, 0.25), nest: mat(0xf2f1ec, 0.45, 0.0), reject: mat(0xb8392f, 0.6, 0.05), lens: mat(0x111316, 0.2, 0.3),
+  aluDark: mat(0x9aa1a8, 0.4, 0.7),
+  steel: mat(0xd2d6db, 0.22, 0.85),
+  t3Dark: mat(0x3b4046, 0.5, 0.2),
+  lens: mat(0x111316, 0.2, 0.3),
   boxBody: mat(0x3a1f14, 0.75, 0.05), gold: mat(0xd4a83a, 0.3, 0.85), cavity: mat(0x241209, 0.85, 0.0),
-  tunnel: mat(0xe9ecef, 0.3, 0.7), cold: mat(0x9fd3f5, 0.4, 0, { emissive: 0x2b6c99, emissiveIntensity: 0.6 }),
   glass: new THREE.MeshPhysicalMaterial({ color: 0xd8e6ee, roughness: 0.05, transparent: true, opacity: 0.12, depthWrite: false }),
 };
 
