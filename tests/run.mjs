@@ -71,7 +71,7 @@ for (const x of [0.35, 1.40, 1.80, 2.80]) {
   checkModel({ ...L, ...L.rebuild(x) }, `belt index ${x.toFixed(2)} s`);
 }
 check(Math.abs(M0.DURATION - 42.51) <= 0.01, `default cycle = ${M0.DURATION.toFixed(2)} s (42.51 ± 0.01)`);
-check(Math.abs(L.T3G.riser + 0.150 - L.T3G.tool - L.T3.zTop) <= 1e-9, "T3 riser and tool match stroke-top TCP height");
+check(Math.abs(L.T3G.riser + L.T3G.shaftEnd0 - L.T3G.tool - L.T3.zTop) <= 1e-9, "T3 riser + shaft end at stroke top - tool = TCP top (210 mm)");
 const cycles = [0.35, 0.70, 1.40, 1.80, 2.80].map((x) => L.cycleFor(x).DURATION);
 check(cycles.every((d, i) => i === 0 || d >= cycles[i - 1] - 1e-9), "cycle duration is nondecreasing with belt index time");
 const M18 = L.rebuild(1.80);

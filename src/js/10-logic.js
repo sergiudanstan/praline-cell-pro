@@ -22,10 +22,11 @@ const DELTA = { cx: 0.0, cy: 0.0, zb: 0.82, F: 0.100, E: 0.035, RF: 0.200, RE: 0
                 lim: [-40, 95], arms: [90, 210, 330] };
 // Epson T3-401S: 225 + 175 mm arms, 150 mm Z stroke, J1 ±132°, J2 ±141°, J4 ±360°.
 const T3 = { L1: 0.225, L2: 0.175, zTop: 0.21, stroke: 0.150, lim1: 132, lim2: 141, lim4: 360 };
-// Real T3-401S envelope from Epson's outer-dimension drawing, metres above the T3 mounting face.
-// The T3 stands on a riser: shaft end at stroke top is 150 mm above the mounting face, so riser + 0.150 - tool = T3.zTop.
-const T3G = { riser: 0.135, tool: 0.075, a1: [0.1923, 0.2273], a2: [0.2362, 0.4127], a2Front: 0.0478, a2Rear: 0.070,
-              shaftLen: 0.3407, ductBase: 0.446, ductTop: 0.5985, ductR: 0.017 };
+// Real T3-401S envelope from Epson's outer-dimension drawing (heights checked against Epson's CAD), metres above the T3 mounting face.
+// Shaft 330 mm long, its end 160.7 mm above the mounting face at the stroke top (J3 = 0). The T3 stands on a riser,
+// so riser + shaftEnd0 - tool = T3.zTop (the TCP is the fingertip centre, tool = shaft end to TCP).
+const T3G = { riser: 0.135, tool: 0.0857, a1: [0.1923, 0.2273], a2: [0.2362, 0.4127], a2Front: 0.0478, a2Rear: 0.070,
+              shaftEnd0: 0.1607, shaftLen: 0.330, ductBase: 0.446, ductTop: 0.5985, ductR: 0.017 };
 // Belt what-if: seconds per 75 mm index. index0 reproduces the validated 42.51 s cycle.
 const BELT = { index0: 0.70, index: 0.70, min: 0.35, max: 2.80, step: 0.05 };
 const SAFE_DELTA = 0.215, SAFE_T3 = 0.20;                // approach heights (TCP z)
