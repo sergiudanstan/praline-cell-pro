@@ -21,7 +21,13 @@ const FLAVOURS = { dark: "Dark 70 % dome", milk: "Milk praliné square", ruby: "
 const DELTA = { cx: 0.0, cy: 0.0, zb: 0.82, F: 0.100, E: 0.035, RF: 0.200, RE: 0.520, tool: 0.100,
                 lim: [-40, 95], arms: [90, 210, 330] };
 // Epson T3-401S: 225 + 175 mm arms, 150 mm Z stroke, J1 ±132°, J2 ±141°, J4 ±360°.
-const T3 = { L1: 0.225, L2: 0.175, zArm: 0.30, zTop: 0.21, stroke: 0.150, lim1: 132, lim2: 141, lim4: 360 };
+const T3 = { L1: 0.225, L2: 0.175, zTop: 0.21, stroke: 0.150, lim1: 132, lim2: 141, lim4: 360 };
+// Real T3-401S envelope from Epson's outer-dimension drawing, metres above the T3 mounting face.
+// The T3 stands on a riser: shaft end at stroke top is 150 mm above the mounting face, so riser + 0.150 - tool = T3.zTop.
+const T3G = { riser: 0.135, tool: 0.075, a1: [0.1923, 0.2273], a2: [0.2362, 0.4127], a2Front: 0.0478, a2Rear: 0.070,
+              shaftLen: 0.3407, ductBase: 0.446, ductTop: 0.5985, ductR: 0.017 };
+// Belt what-if: seconds per 75 mm index. index0 reproduces the validated 42.51 s cycle.
+const BELT = { index0: 0.70, index: 0.70, min: 0.35, max: 2.80, step: 0.05 };
 const SAFE_DELTA = 0.215, SAFE_T3 = 0.20;                // approach heights (TCP z)
 // Two mirrored stations, A on the -y side of the belt and B on the +y side. Each T3 faces the belt.
 const SIDES = [-1, 1].map((s, i) => ({
@@ -101,14 +107,17 @@ const P = {
 const slotXY = (sd, n) => [BOX.x0 + (n % BOX.cols) * BOX.pitch, sd.s * (BOX.y0 + Math.floor(n / BOX.cols) * BOX.pitch)];
 
 const ACTORS = ["conv", "delta", "t3a", "t3b"];
-const segs = { conv: [], delta: [], t3a: [], t3b: [] };
-const zones = SIDES.map(() => ({ delta: [], t3: [] }));   // mutex intervals per nest
-const parts = [];
-const marks = { inspect: [] };
-const boxes = SIDES.map(() => ({ last: 0, exit: null }));
+let segs, zones, parts, marks, boxes;      // rebuilt by rebuild() for each belt index
+function resetModel() {
+  segs = { conv: [], delta: [], t3a: [], t3b: [] };
+  zones = SIDES.map(() => ({ delta: [], t3: [] }));   // mutex intervals per nest
+  parts = [];
+  marks = { inspect: [] };
+  boxes = SIDES.map(() => ({ last: 0, exit: null }));
+}
 function add(actor, seg) { segs[actor].push(seg); return seg.t1; }
 
-function schedule() {
+function schedule(beltIndex) {
   let tConv = 0.2, tDelta = 0, pickClear = 0, deltaAt = P.deltaHome, lastSide = 1;
   const st = SIDES.map((sd) => ({ t: 0, q: mustIK(sd, sd.ready), free: 0, good: 0, slot: 0 }));
   const L = CELL.belt.pitch;
@@ -118,8 +127,8 @@ function schedule() {
     // the belt indexes one pitch once the pick window is clear
     const ci0 = Math.max(tConv, pickClear);
     if (ci0 > tConv) add("conv", { t0: tConv, t1: ci0, kind: "wait", label: "Wait: pick window occupied", cmd: "WAIT pick_clear" });
-    const ci1 = ci0 + 0.70;
-    add("conv", { t0: ci0, t1: ci1, kind: "index", label: `Index praline ${k + 1}`, cmd: `BELT.INDEX ${(L * 1000).toFixed(0)} mm`, k });
+    const ci1 = ci0 + beltIndex;
+    add("conv", { t0: ci0, t1: ci1, kind: "index", label: `Index praline ${k + 1}`, cmd: `BELT.INDEX ${(L * 1000).toFixed(0)} mm T=${beltIndex.toFixed(2)} s`, k });
     tConv = ci1;
 
     // dispatch: the nest that frees first, among boxes that still have room
@@ -203,7 +212,7 @@ function schedule() {
   for (const p of parts) p.flavour = p.reject ? RECIPE[(p.k * 5) % CAP] : RECIPE[p.slot];
   return end;
 }
-const DURATION = schedule();
+let DURATION;
 
 function segAt(list, t) {
   let lo = 0, hi = list.length - 1;
@@ -264,7 +273,7 @@ function segDist(p1, q1, p2, q2) {
   }
   return Math.hypot(...[0, 1, 2].map((j) => p1[j] + d1[j] * s - (p2[j] + d2[j] * t)));
 }
-function deltaCapsules(p, ang) {
+function deltaCapsules(p, ang) {   // envelopes of the detailed delta: upper arm + hub, elbow pin + balls, rod pair + sockets + springs, plate, tool
   const eff = [p[0], p[1], p[2] + DELTA.tool], caps = [];
   DELTA.arms.forEach((th, i) => {
     const c = Math.cos(th * RAD), s = Math.sin(th * RAD), al = ang[i];
@@ -272,17 +281,27 @@ function deltaCapsules(p, ang) {
     const ry = -DELTA.F - DELTA.RF * Math.cos(al);
     const E = [DELTA.cx - ry * s, DELTA.cy + ry * c, DELTA.zb - DELTA.RF * Math.sin(al)];
     const Pp = [eff[0] + DELTA.E * s, eff[1] - DELTA.E * c, eff[2]];
-    caps.push([S, E, 0.022], [E, Pp, 0.030]);
+    caps.push([S, E, 0.030],
+      [[E[0] - c * 0.038, E[1] - s * 0.038, E[2]], [E[0] + c * 0.038, E[1] + s * 0.038, E[2]], 0.016],
+      [E, Pp, 0.041]);
   });
-  caps.push([eff, [p[0], p[1], p[2] - 0.01], 0.030]);
+  caps.push([[eff[0], eff[1], eff[2] + 0.006], [eff[0], eff[1], eff[2] - 0.006], 0.060]);
+  caps.push([eff, [p[0], p[1], p[2] - 0.002], 0.016]);
   return caps;
 }
-function t3Capsules(sd, q) {
-  const k = t3FK(sd, q);
+function t3Capsules(sd, q) {       // envelopes of the real T3-401S: arm 1, arm 2 (two layers), gripper, shaft, cable duct
+  const k = t3FK(sd, q), zb = T3G.riser, J1 = [sd.x, sd.y], J2 = k.j2, J3 = k.j3;
+  const d = [J3[0] - J2[0], J3[1] - J2[1]], n = Math.hypot(d[0], d[1]);
+  const tip = [J3[0] + d[0] / n * T3G.a2Front, J3[1] + d[1] / n * T3G.a2Front];
+  const mid = [(J1[0] + J2[0]) / 2, (J1[1] + J2[1]) / 2];
   return [
-    [[sd.x, sd.y, T3.zArm + 0.03], [k.j2[0], k.j2[1], T3.zArm + 0.03], 0.055],
-    [[k.j2[0], k.j2[1], T3.zArm + 0.09], [k.j3[0], k.j3[1], T3.zArm + 0.09], 0.048],
-    [[k.j3[0], k.j3[1], q[2] - 0.01], [k.j3[0], k.j3[1], q[2] + 0.30], 0.025],
+    [[J1[0], J1[1], zb + 0.21], [J2[0], J2[1], zb + 0.21], 0.045],
+    [[J2[0], J2[1], zb + 0.275], [tip[0], tip[1], zb + 0.275], 0.055],
+    [[J2[0], J2[1], zb + 0.365], [tip[0], tip[1], zb + 0.335], 0.050],
+    [[J3[0], J3[1], q[2] - 0.005], [J3[0], J3[1], q[2] + T3G.tool], 0.030],
+    [[J3[0], J3[1], q[2] + T3G.tool], [J3[0], J3[1], q[2] + T3G.tool + T3G.shaftLen], 0.016],
+    [[J1[0], J1[1], zb + T3G.ductBase], [mid[0], mid[1], zb + T3G.ductTop], 0.024],
+    [[mid[0], mid[1], zb + T3G.ductTop], [J2[0], J2[1], zb + T3G.a2[1]], 0.024],
   ];
 }
 function capsClear(A, B) {
@@ -297,28 +316,54 @@ function clearances(dp, ang, qa, qb) {   // [delta-A, delta-B, A-B] in metres
   return [dc ? capsClear(dc, ca) : NaN, dc ? capsClear(dc, cb) : NaN, capsClear(ca, cb)];
 }
 
-// sample the whole cycle once for the report, the paths, the tests and the CSV
-const RATE = 30, NS = Math.ceil(DURATION * RATE) + 1;
-const S = { dp: [], da: [], tq: [[], []], tp: [[], []], cl: [[], [], []] };
-let ikFail = 0;
-for (let n = 0; n < NS; n++) {
-  const t = Math.min(DURATION, n / RATE);
-  const d = deltaPose(t), a = deltaIK(d.p), qs = SIDES.map((sd) => t3Pose(sd, t).q);
-  if (!a) ikFail++;
-  S.dp.push(d.p); S.da.push(a || S.da.at(-1) || [0, 0, 0]);
-  SIDES.forEach((sd, i) => { S.tq[i].push(qs[i]); S.tp[i].push(t3FK(sd, qs[i]).tcp); });
-  clearances(d.p, a, qs[0], qs[1]).forEach((c, j) => S.cl[j].push(c));
+// sample the whole cycle for the report, the paths, the tests and the CSV (redone by rebuild())
+const RATE = 30;
+let NS, S, ikFail, minClear, peakV, peakW;
+function sampleCycle() {
+  NS = Math.ceil(DURATION * RATE) + 1;
+  S = { dp: [], da: [], tq: [[], []], tp: [[], []], cl: [[], [], []] };
+  ikFail = 0;
+  for (let n = 0; n < NS; n++) {
+    const t = Math.min(DURATION, n / RATE);
+    const d = deltaPose(t), a = deltaIK(d.p), qs = SIDES.map((sd) => t3Pose(sd, t).q);
+    if (!a) ikFail++;
+    S.dp.push(d.p); S.da.push(a || S.da.at(-1) || [0, 0, 0]);
+    SIDES.forEach((sd, i) => { S.tq[i].push(qs[i]); S.tp[i].push(t3FK(sd, qs[i]).tcp); });
+    clearances(d.p, a, qs[0], qs[1]).forEach((c, j) => S.cl[j].push(c));
+  }
+  minClear = S.cl.map((list) => {
+    let m = Infinity, at = 0;
+    list.forEach((c, n) => { if (c < m) { m = c; at = n / RATE; } });
+    return { m, at };
+  });
+  peakV = 0; peakW = 0;
+  for (let n = 1; n < NS; n++) {
+    peakV = Math.max(peakV, Math.hypot(...S.dp[n].map((x, j) => x - S.dp[n - 1][j])) * RATE);
+    for (let j = 0; j < 3; j++) peakW = Math.max(peakW, Math.abs(S.da[n][j] - S.da[n - 1][j]) * RATE);
+  }
 }
-const minClear = S.cl.map((list) => {
-  let m = Infinity, at = 0;
-  list.forEach((c, n) => { if (c < m) { m = c; at = n / RATE; } });
-  return { m, at };
-});
-let peakV = 0, peakW = 0;
-for (let n = 1; n < NS; n++) {
-  peakV = Math.max(peakV, Math.hypot(...S.dp[n].map((x, j) => x - S.dp[n - 1][j])) * RATE);
-  for (let j = 0; j < 3; j++) peakW = Math.max(peakW, Math.abs(S.da[n][j] - S.da[n - 1][j]) * RATE);
+// Rebuilds the program, the sampling and the clearances for a belt index time (s). Returns the fresh model.
+function rebuild(beltIndex = BELT.index0) {
+  BELT.index = clamp(beltIndex, BELT.min, BELT.max);
+  resetModel();
+  DURATION = schedule(BELT.index);
+  sampleCycle();
+  return { segs, zones, parts, marks, boxes, DURATION, S, NS, minClear, ikFail, peakV, peakW, beltIndex: BELT.index };
 }
+// Schedule only (no sampling), for the what-if chart. Leaves the current model untouched.
+function cycleFor(beltIndex) {
+  const keep = { segs, zones, parts, marks, boxes, DURATION };
+  resetModel();
+  const d = schedule(clamp(beltIndex, BELT.min, BELT.max));
+  const busyOf = (a) => segs[a].filter((s) => s.kind !== "wait").reduce((n, s) => n + s.t1 - s.t0, 0);
+  const waitOf = (a, label) => segs[a].filter((s) => s.kind === "wait" && s.label === label).reduce((n, s) => n + s.t1 - s.t0, 0);
+  const out = { beltIndex, DURATION: d, util: Object.fromEntries(ACTORS.map((a) => [a, busyOf(a) / d])),
+                deltaWaitsBelt: waitOf("delta", "Wait: praline in pick window"), beltWaits: waitOf("conv", "Wait: pick window occupied") };
+  ({ segs, zones, parts, marks, boxes, DURATION } = keep);
+  return out;
+}
+function current() { return { segs, DURATION }; }
+rebuild();
 console.log("[praline] duration", DURATION.toFixed(2), "ikFail", ikFail, "minClear mm", minClear.map((c) => (c.m * 1000).toFixed(1)).join(" / "));
 // @@logic-end
 

@@ -425,7 +425,13 @@ const FLAVOURS = { dark: "Dark 70 % dome", milk: "Milk praliné square", ruby: "
 const DELTA = { cx: 0.0, cy: 0.0, zb: 0.82, F: 0.100, E: 0.035, RF: 0.200, RE: 0.520, tool: 0.100,
                 lim: [-40, 95], arms: [90, 210, 330] };
 // Epson T3-401S: 225 + 175 mm arms, 150 mm Z stroke, J1 ±132°, J2 ±141°, J4 ±360°.
-const T3 = { L1: 0.225, L2: 0.175, zArm: 0.30, zTop: 0.21, stroke: 0.150, lim1: 132, lim2: 141, lim4: 360 };
+const T3 = { L1: 0.225, L2: 0.175, zTop: 0.21, stroke: 0.150, lim1: 132, lim2: 141, lim4: 360 };
+// Real T3-401S envelope from Epson's outer-dimension drawing, metres above the T3 mounting face.
+// The T3 stands on a riser: shaft end at stroke top is 150 mm above the mounting face, so riser + 0.150 - tool = T3.zTop.
+const T3G = { riser: 0.135, tool: 0.075, a1: [0.1923, 0.2273], a2: [0.2362, 0.4127], a2Front: 0.0478, a2Rear: 0.070,
+              shaftLen: 0.3407, ductBase: 0.446, ductTop: 0.5985, ductR: 0.017 };
+// Belt what-if: seconds per 75 mm index. index0 reproduces the validated 42.51 s cycle.
+const BELT = { index0: 0.70, index: 0.70, min: 0.35, max: 2.80, step: 0.05 };
 const SAFE_DELTA = 0.215, SAFE_T3 = 0.20;                // approach heights (TCP z)
 // Two mirrored stations, A on the -y side of the belt and B on the +y side. Each T3 faces the belt.
 const SIDES = [-1, 1].map((s, i) => ({
@@ -505,14 +511,17 @@ const P = {
 const slotXY = (sd, n) => [BOX.x0 + (n % BOX.cols) * BOX.pitch, sd.s * (BOX.y0 + Math.floor(n / BOX.cols) * BOX.pitch)];
 
 const ACTORS = ["conv", "delta", "t3a", "t3b"];
-const segs = { conv: [], delta: [], t3a: [], t3b: [] };
-const zones = SIDES.map(() => ({ delta: [], t3: [] }));   // mutex intervals per nest
-const parts = [];
-const marks = { inspect: [] };
-const boxes = SIDES.map(() => ({ last: 0, exit: null }));
+let segs, zones, parts, marks, boxes;      // rebuilt by rebuild() for each belt index
+function resetModel() {
+  segs = { conv: [], delta: [], t3a: [], t3b: [] };
+  zones = SIDES.map(() => ({ delta: [], t3: [] }));   // mutex intervals per nest
+  parts = [];
+  marks = { inspect: [] };
+  boxes = SIDES.map(() => ({ last: 0, exit: null }));
+}
 function add(actor, seg) { segs[actor].push(seg); return seg.t1; }
 
-function schedule() {
+function schedule(beltIndex) {
   let tConv = 0.2, tDelta = 0, pickClear = 0, deltaAt = P.deltaHome, lastSide = 1;
   const st = SIDES.map((sd) => ({ t: 0, q: mustIK(sd, sd.ready), free: 0, good: 0, slot: 0 }));
   const L = CELL.belt.pitch;
@@ -522,8 +531,8 @@ function schedule() {
     // the belt indexes one pitch once the pick window is clear
     const ci0 = Math.max(tConv, pickClear);
     if (ci0 > tConv) add("conv", { t0: tConv, t1: ci0, kind: "wait", label: "Wait: pick window occupied", cmd: "WAIT pick_clear" });
-    const ci1 = ci0 + 0.70;
-    add("conv", { t0: ci0, t1: ci1, kind: "index", label: `Index praline ${k + 1}`, cmd: `BELT.INDEX ${(L * 1000).toFixed(0)} mm`, k });
+    const ci1 = ci0 + beltIndex;
+    add("conv", { t0: ci0, t1: ci1, kind: "index", label: `Index praline ${k + 1}`, cmd: `BELT.INDEX ${(L * 1000).toFixed(0)} mm T=${beltIndex.toFixed(2)} s`, k });
     tConv = ci1;
 
     // dispatch: the nest that frees first, among boxes that still have room
@@ -607,7 +616,7 @@ function schedule() {
   for (const p of parts) p.flavour = p.reject ? RECIPE[(p.k * 5) % CAP] : RECIPE[p.slot];
   return end;
 }
-const DURATION = schedule();
+let DURATION;
 
 function segAt(list, t) {
   let lo = 0, hi = list.length - 1;
@@ -668,7 +677,7 @@ function segDist(p1, q1, p2, q2) {
   }
   return Math.hypot(...[0, 1, 2].map((j) => p1[j] + d1[j] * s - (p2[j] + d2[j] * t)));
 }
-function deltaCapsules(p, ang) {
+function deltaCapsules(p, ang) {   // envelopes of the detailed delta: upper arm + hub, elbow pin + balls, rod pair + sockets + springs, plate, tool
   const eff = [p[0], p[1], p[2] + DELTA.tool], caps = [];
   DELTA.arms.forEach((th, i) => {
     const c = Math.cos(th * RAD), s = Math.sin(th * RAD), al = ang[i];
@@ -676,17 +685,27 @@ function deltaCapsules(p, ang) {
     const ry = -DELTA.F - DELTA.RF * Math.cos(al);
     const E = [DELTA.cx - ry * s, DELTA.cy + ry * c, DELTA.zb - DELTA.RF * Math.sin(al)];
     const Pp = [eff[0] + DELTA.E * s, eff[1] - DELTA.E * c, eff[2]];
-    caps.push([S, E, 0.022], [E, Pp, 0.030]);
+    caps.push([S, E, 0.030],
+      [[E[0] - c * 0.038, E[1] - s * 0.038, E[2]], [E[0] + c * 0.038, E[1] + s * 0.038, E[2]], 0.016],
+      [E, Pp, 0.041]);
   });
-  caps.push([eff, [p[0], p[1], p[2] - 0.01], 0.030]);
+  caps.push([[eff[0], eff[1], eff[2] + 0.006], [eff[0], eff[1], eff[2] - 0.006], 0.060]);
+  caps.push([eff, [p[0], p[1], p[2] - 0.002], 0.016]);
   return caps;
 }
-function t3Capsules(sd, q) {
-  const k = t3FK(sd, q);
+function t3Capsules(sd, q) {       // envelopes of the real T3-401S: arm 1, arm 2 (two layers), gripper, shaft, cable duct
+  const k = t3FK(sd, q), zb = T3G.riser, J1 = [sd.x, sd.y], J2 = k.j2, J3 = k.j3;
+  const d = [J3[0] - J2[0], J3[1] - J2[1]], n = Math.hypot(d[0], d[1]);
+  const tip = [J3[0] + d[0] / n * T3G.a2Front, J3[1] + d[1] / n * T3G.a2Front];
+  const mid = [(J1[0] + J2[0]) / 2, (J1[1] + J2[1]) / 2];
   return [
-    [[sd.x, sd.y, T3.zArm + 0.03], [k.j2[0], k.j2[1], T3.zArm + 0.03], 0.055],
-    [[k.j2[0], k.j2[1], T3.zArm + 0.09], [k.j3[0], k.j3[1], T3.zArm + 0.09], 0.048],
-    [[k.j3[0], k.j3[1], q[2] - 0.01], [k.j3[0], k.j3[1], q[2] + 0.30], 0.025],
+    [[J1[0], J1[1], zb + 0.21], [J2[0], J2[1], zb + 0.21], 0.045],
+    [[J2[0], J2[1], zb + 0.275], [tip[0], tip[1], zb + 0.275], 0.055],
+    [[J2[0], J2[1], zb + 0.365], [tip[0], tip[1], zb + 0.335], 0.050],
+    [[J3[0], J3[1], q[2] - 0.005], [J3[0], J3[1], q[2] + T3G.tool], 0.030],
+    [[J3[0], J3[1], q[2] + T3G.tool], [J3[0], J3[1], q[2] + T3G.tool + T3G.shaftLen], 0.016],
+    [[J1[0], J1[1], zb + T3G.ductBase], [mid[0], mid[1], zb + T3G.ductTop], 0.024],
+    [[mid[0], mid[1], zb + T3G.ductTop], [J2[0], J2[1], zb + T3G.a2[1]], 0.024],
   ];
 }
 function capsClear(A, B) {
@@ -701,28 +720,54 @@ function clearances(dp, ang, qa, qb) {   // [delta-A, delta-B, A-B] in metres
   return [dc ? capsClear(dc, ca) : NaN, dc ? capsClear(dc, cb) : NaN, capsClear(ca, cb)];
 }
 
-// sample the whole cycle once for the report, the paths, the tests and the CSV
-const RATE = 30, NS = Math.ceil(DURATION * RATE) + 1;
-const S = { dp: [], da: [], tq: [[], []], tp: [[], []], cl: [[], [], []] };
-let ikFail = 0;
-for (let n = 0; n < NS; n++) {
-  const t = Math.min(DURATION, n / RATE);
-  const d = deltaPose(t), a = deltaIK(d.p), qs = SIDES.map((sd) => t3Pose(sd, t).q);
-  if (!a) ikFail++;
-  S.dp.push(d.p); S.da.push(a || S.da.at(-1) || [0, 0, 0]);
-  SIDES.forEach((sd, i) => { S.tq[i].push(qs[i]); S.tp[i].push(t3FK(sd, qs[i]).tcp); });
-  clearances(d.p, a, qs[0], qs[1]).forEach((c, j) => S.cl[j].push(c));
+// sample the whole cycle for the report, the paths, the tests and the CSV (redone by rebuild())
+const RATE = 30;
+let NS, S, ikFail, minClear, peakV, peakW;
+function sampleCycle() {
+  NS = Math.ceil(DURATION * RATE) + 1;
+  S = { dp: [], da: [], tq: [[], []], tp: [[], []], cl: [[], [], []] };
+  ikFail = 0;
+  for (let n = 0; n < NS; n++) {
+    const t = Math.min(DURATION, n / RATE);
+    const d = deltaPose(t), a = deltaIK(d.p), qs = SIDES.map((sd) => t3Pose(sd, t).q);
+    if (!a) ikFail++;
+    S.dp.push(d.p); S.da.push(a || S.da.at(-1) || [0, 0, 0]);
+    SIDES.forEach((sd, i) => { S.tq[i].push(qs[i]); S.tp[i].push(t3FK(sd, qs[i]).tcp); });
+    clearances(d.p, a, qs[0], qs[1]).forEach((c, j) => S.cl[j].push(c));
+  }
+  minClear = S.cl.map((list) => {
+    let m = Infinity, at = 0;
+    list.forEach((c, n) => { if (c < m) { m = c; at = n / RATE; } });
+    return { m, at };
+  });
+  peakV = 0; peakW = 0;
+  for (let n = 1; n < NS; n++) {
+    peakV = Math.max(peakV, Math.hypot(...S.dp[n].map((x, j) => x - S.dp[n - 1][j])) * RATE);
+    for (let j = 0; j < 3; j++) peakW = Math.max(peakW, Math.abs(S.da[n][j] - S.da[n - 1][j]) * RATE);
+  }
 }
-const minClear = S.cl.map((list) => {
-  let m = Infinity, at = 0;
-  list.forEach((c, n) => { if (c < m) { m = c; at = n / RATE; } });
-  return { m, at };
-});
-let peakV = 0, peakW = 0;
-for (let n = 1; n < NS; n++) {
-  peakV = Math.max(peakV, Math.hypot(...S.dp[n].map((x, j) => x - S.dp[n - 1][j])) * RATE);
-  for (let j = 0; j < 3; j++) peakW = Math.max(peakW, Math.abs(S.da[n][j] - S.da[n - 1][j]) * RATE);
+// Rebuilds the program, the sampling and the clearances for a belt index time (s). Returns the fresh model.
+function rebuild(beltIndex = BELT.index0) {
+  BELT.index = clamp(beltIndex, BELT.min, BELT.max);
+  resetModel();
+  DURATION = schedule(BELT.index);
+  sampleCycle();
+  return { segs, zones, parts, marks, boxes, DURATION, S, NS, minClear, ikFail, peakV, peakW, beltIndex: BELT.index };
 }
+// Schedule only (no sampling), for the what-if chart. Leaves the current model untouched.
+function cycleFor(beltIndex) {
+  const keep = { segs, zones, parts, marks, boxes, DURATION };
+  resetModel();
+  const d = schedule(clamp(beltIndex, BELT.min, BELT.max));
+  const busyOf = (a) => segs[a].filter((s) => s.kind !== "wait").reduce((n, s) => n + s.t1 - s.t0, 0);
+  const waitOf = (a, label) => segs[a].filter((s) => s.kind === "wait" && s.label === label).reduce((n, s) => n + s.t1 - s.t0, 0);
+  const out = { beltIndex, DURATION: d, util: Object.fromEntries(ACTORS.map((a) => [a, busyOf(a) / d])),
+                deltaWaitsBelt: waitOf("delta", "Wait: praline in pick window"), beltWaits: waitOf("conv", "Wait: pick window occupied") };
+  ({ segs, zones, parts, marks, boxes, DURATION } = keep);
+  return out;
+}
+function current() { return { segs, DURATION }; }
+rebuild();
 console.log("[praline] duration", DURATION.toFixed(2), "ikFail", ikFail, "minClear mm", minClear.map((c) => (c.m * 1000).toFixed(1)).join(" / "));
 // @@logic-end
 
@@ -982,88 +1027,309 @@ const partMeshes = parts.map((p) => {
   world.add(g); return g;
 });
 
-// ---------------------------------------------------------------- delta robot model
+// ---------------------------------------------------------------- delta robot: plan §6.2, metres, z-up
 const D = DELTA;
 const deltaGroup = new THREE.Group(); world.add(deltaGroup);
-vcyl(0.17, 0.018, M.deltaPlate, D.cx, D.cy, D.zb + 0.075, 6, deltaGroup).rotation.set(Math.PI / 2, Math.PI / 6, 0);
-vcyl(0.06, 0.06, M.black, D.cx, D.cy, D.zb + 0.11, 32, deltaGroup);
+// Nominal triangle vertices point between the arms; fillets are tangent to its flat sides.
+function deltaTriangle(radius, fillet) {
+  const pts = [];
+  for (const deg of [60, 180, 300]) {
+    const a = deg * RAD, cx = (radius - 2 * fillet) * Math.cos(a), cy = (radius - 2 * fillet) * Math.sin(a);
+    for (let j = -60; j <= 60; j += 6) pts.push([cx + fillet * Math.cos(a + j * RAD), cy + fillet * Math.sin(a + j * RAD)]);
+  }
+  return pts;
+}
+// Small edge breaks, fastener locations, connector and hose-clip details are cosmetic approximations.
+function deltaCylinder(r, z0, z1, material, parent) {
+  const b = Math.min(0.0005, (z1 - z0) / 4, r / 4);
+  return lathe([[0, z0], [r - b, z0], [r, z0 + b], [r, z1 - b], [r - b, z1], [0, z1]], material, parent);
+}
+const deltaFixed = new THREE.Group(); deltaFixed.position.set(D.cx, D.cy, 0); deltaGroup.add(deltaFixed);
+const dl = LAYOUT.delta;
+rbox(0.40, 0.40, dl.plateZ[1] - dl.plateZ[0], 0.003, M.aluClear, 0, 0, (dl.plateZ[0] + dl.plateZ[1]) / 2, deltaFixed);
+for (const s of [-1, 1]) for (const t of [-0.13, 0.13]) {
+  addBolt(V(s * 0.18, t, dl.plateZ[1]), V(0, 0, 1), deltaFixed);
+  addBolt(V(t, s * 0.18, dl.plateZ[1]), V(0, 0, 1), deltaFixed);
+}
+extrudeXY(deltaTriangle(0.215, 0.040), dl.hoodZ[0], dl.hoodZ[1] - 0.020, M.hoodSteel, deltaFixed, 0.002);
+// Low spun cover: 20 mm fall over 215 mm (> 3 degrees), meeting the adaptor at its crown.
+lathe([[0.215, dl.hoodZ[1] - 0.020], [0.214, dl.hoodZ[1] - 0.0195], [0.020, dl.hoodZ[1]], [0, dl.hoodZ[1]]], M.hoodSteel, deltaFixed);
+extrudeXY(deltaTriangle(0.250, 0.045), dl.baseZ[0], dl.baseZ[1], M.aluBlasted, deltaFixed, 0.002);
+const deltaSpringMaterial = M.steel.clone();
+{
+  const canvas = document.createElement("canvas"); canvas.width = canvas.height = 128;
+  const ctx = canvas.getContext("2d"); ctx.fillStyle = "#aaa"; ctx.fillRect(0, 0, 128, 128);
+  ctx.strokeStyle = "#222"; ctx.lineWidth = 5;
+  for (let y = -128; y < 256; y += 16) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(128, y + 16); ctx.stroke(); }
+  const texture = new THREE.CanvasTexture(canvas); texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  deltaSpringMaterial.bumpMap = texture; deltaSpringMaterial.bumpScale = 0.0005;
+}
+const eff = new THREE.Group(); world.add(eff);
+// Three long sides of length 80 mm at apothem 24 mm; short sides truncate the corners.
+const deltaPlateOutline = [];
+for (const th of D.arms) {
+  const c = Math.cos(th * RAD), s = Math.sin(th * RAD);
+  for (const sg of [-1, 1]) deltaPlateOutline.push([0.024 * s + sg * 0.040 * c, -0.024 * c + sg * 0.040 * s]);
+}
+deltaPlateOutline.sort((a, b) => Math.atan2(a[1], a[0]) - Math.atan2(b[1], b[0]));
+extrudeXY(deltaPlateOutline, -0.006, 0.006, M.aluClear, eff, 0.0015);
 const deltaArms = D.arms.map((th) => {
   const c = Math.cos(th * RAD), s = Math.sin(th * RAD);
-  const S0 = V(D.cx + D.F * s, D.cy - D.F * c, D.zb);
-  const mg = new THREE.Group(); mg.position.copy(S0); mg.rotation.z = th * RAD; deltaGroup.add(mg);
-  box(0.09, 0.075, 0.075, M.black, -0.07, 0.01, 0.0, mg);
-  vcyl(0.035, 0.03, M.aluDark, 0, 0.0, 0, 24, mg).rotation.set(0, 0, Math.PI / 2);
-  box(0.03, 0.03, 0.07, M.aluDark, -0.07, 0.01, 0.06, mg);
-  const arm = new THREE.Group(); arm.position.copy(S0); arm.rotation.z = th * RAD; deltaGroup.add(arm);
-  const pivot = new THREE.Group(); arm.add(pivot);
-  box(0.03, D.RF, 0.026, M.deltaArm, 0.03, -D.RF / 2, 0, pivot);
-  vcyl(0.02, 0.05, M.steel, 0.03, 0, 0, 20, pivot).rotation.set(0, 0, Math.PI / 2);
-  box(0.07, 0.016, 0.016, M.steel, 0.03, -D.RF, 0, pivot);
-  const rods = [rod(0.0055, M.carbon), rod(0.0055, M.carbon)];
-  const balls = [0, 1, 2, 3].map(() => mesh(new THREE.SphereGeometry(0.009, 16, 12), M.steel));
-  return { th, c, s, pivot, rods, balls };
+  const shoulder = new THREE.Group(); shoulder.position.set(D.cx + D.F * s, D.cy - D.F * c, D.zb); shoulder.rotation.z = th * RAD; deltaGroup.add(shoulder);
+  const gearbox = deltaCylinder(dl.driveR, 0.0225, 0.0925, M.gearboxSilver, shoulder); gearbox.rotation.y = Math.PI / 2;
+  rbox(0.008, 0.060, 0.060, 0.002, M.aluBlasted, 0.096, 0, 0, shoulder);
+  rbox(0.120, 0.060, 0.060, 0.004, M.motorBlack, 0.160, 0, 0, shoulder);
+  rbox(0.025, 0.020, 0.030, 0.002, M.motorBlack, 0.180, 0.030, 0.015, shoulder);
+  for (const x of [0.173, 0.187]) { const gland = deltaCylinder(0.004, 0, 0.010, M.blackRubber, shoulder); gland.rotation.x = -Math.PI / 2; gland.position.set(x, 0.040, 0.015); }
+  rbox(0.050, 0.040, 0.060, 0.003, M.aluBlasted, -0.0475, 0, 0, shoulder);
+  for (const x of [-0.0475, 0.080]) rbox(0.012, 0.040, dl.baseZ[0] - D.zb, 0.002, M.aluBlasted, x, 0, (dl.baseZ[0] - D.zb) / 2, shoulder);
+  const pivot = new THREE.Group(); shoulder.add(pivot);
+  const hub = deltaCylinder(0.035, -0.0225, 0.0225, M.aluClear, pivot); hub.rotation.y = Math.PI / 2;
+  const upper = deltaCylinder(0.0175, 0, D.RF, M.carbonGloss, pivot); upper.rotation.x = Math.PI / 2;
+  rbox(0.040, 0.040, 0.050, 0.003, M.aluClear, 0, -D.RF, 0, pivot);
+  const pin = deltaCylinder(0.006, -0.038, 0.038, M.steel, pivot); pin.rotation.y = Math.PI / 2; pin.position.y = -D.RF;
+  // Balls belong to the real links, independently of the forearm placement calculation.
+  const elbowBalls = [], plateBalls = [], rods = [], cups = [];
+  for (const sg of [-1, 1]) {
+    const eb = mesh(new THREE.SphereGeometry(0.009, 20, 12), M.steel, pivot); eb.position.set(sg * 0.028, -D.RF, 0); elbowBalls.push(eb);
+    const pb = mesh(new THREE.SphereGeometry(0.009, 20, 12), M.steel, eff); pb.position.set(D.E * s + sg * 0.028 * c, -D.E * c + sg * 0.028 * s, 0); plateBalls.push(pb);
+    const stud = deltaCylinder(0.004, 0, D.E - 0.024, M.steel, eff); stud.quaternion.setFromUnitVectors(V(0, 0, 1), V(s, -c, 0)); stud.position.set(0.024 * s + sg * 0.028 * c, -0.024 * c + sg * 0.028 * s, 0);
+    rods.push(rod(0.007, M.carbonMatte, 24));
+    // Socket rims straddle the ball centres, tapering onto the 14 mm carbon tubes.
+    cups.push([0, 1].map(() => lathe([[0.009, -0.010], [0.0125, -0.0095], [0.013, -0.008], [0.013, 0.008], [0.008, 0.020], [0.007, 0.020]], M.whitePOM, world, 24)));
+  }
+  const springs = Array.from({ length: 4 }, () => rod(0.003, deltaSpringMaterial, 16));
+  return { th, c, s, shoulder, pivot, rods, cups, elbowBalls, plateBalls, springs };
 });
-const eff = new THREE.Group(); world.add(eff);
-vcyl(0.055, 0.012, M.deltaPlate, 0, 0, 0, 6, eff).rotation.set(Math.PI / 2, Math.PI / 6, 0);
-vcyl(0.010, D.tool - 0.02, M.steel, 0, 0, -(D.tool - 0.02) / 2, 20, eff);
-const cup = mesh(new THREE.CylinderGeometry(0.008, 0.013, 0.02, 24), M.silicone, eff); cup.rotation.x = -Math.PI / 2; cup.position.z = -D.tool + 0.01;
-const vacLed = vcyl(0.006, 0.006, mat(0x444444, 0.4, 0, { emissive: 0x000000 }), 0.03, 0, 0.01, 12, eff);
-
+deltaCylinder(0.025, -0.014, -0.006, M.steel, eff);
+deltaCylinder(0.009, -D.tool + 0.025, -0.014, M.steel, eff);
+rbox(0.025, 0.025, 0.025, 0.002, M.steel, 0, 0, -D.tool + 0.0375, eff);
+const deltaVacFitting = deltaCylinder(0.004, 0, 0.012, M.puBlue, eff); deltaVacFitting.rotation.y = Math.PI / 2; deltaVacFitting.position.set(0.0125, 0, -D.tool + 0.0375);
+// One and a half bellows, ending exactly at the TCP contact plane.
+lathe([[0, -D.tool], [0.011, -D.tool], [0.011, -D.tool + 0.001], [0.006, -D.tool + 0.006], [0.010, -D.tool + 0.010], [0.006, -D.tool + 0.015], [0.008, -D.tool + 0.020], [0.008, -D.tool + 0.025]], M.siliconeBlue, eff, 32);
+const deltaVacMaterial = M.lampGreen.clone(); deltaVacMaterial.emissive.setHex(0);
+const vacLed = deltaCylinder(0.004, 0.006, 0.012, deltaVacMaterial, eff); vacLed.position.set(0.015, 0, 0);
+const deltaHoseClips = [0.3, 0.7].map(() => rbox(0.014, 0.014, 0.012, 0.002, M.whitePOM, 0, 0, 0, world));
+const deltaHoseStart = V(D.cx, D.cy, dl.baseZ[0]);
+deltaCylinder(0.004, dl.baseZ[0] - 0.012, dl.baseZ[0], M.puBlue, deltaFixed);
+const deltaHose = tubeAlong([deltaHoseStart, V(D.cx, D.cy, 0.6), V(D.cx + 0.025, D.cy, 0.4)], 0.003, M.puBlue, world, 64, 10);
+let deltaLastPose = null;
 function setDelta(p, ang) {
   eff.position.set(p[0], p[1], p[2] + D.tool);
+  let hosePoints;
   deltaArms.forEach((A, i) => {
-    const al = ang[i];
-    A.pivot.rotation.x = al;
-    const ry = -D.F - D.RF * Math.cos(al);
-    const E = V(D.cx - ry * A.s, D.cy + ry * A.c, D.zb - D.RF * Math.sin(al));
-    E.x += 0.03 * A.c; E.y += 0.03 * A.s;
-    const Pp = V(eff.position.x + D.E * A.s, eff.position.y - D.E * A.c, eff.position.z);
-    Pp.x += 0.03 * A.c; Pp.y += 0.03 * A.s;
-    const t = V(A.c, A.s, 0).multiplyScalar(0.028);
+    const al = ang[i]; A.pivot.rotation.x = al;
+    const E = V(D.cx + (D.F + D.RF * Math.cos(al)) * A.s, D.cy - (D.F + D.RF * Math.cos(al)) * A.c, D.zb - D.RF * Math.sin(al));
+    const Pp = V(p[0] + D.E * A.s, p[1] - D.E * A.c, p[2] + D.tool);
+    const tangent = V(A.c, A.s, 0), direction = Pp.clone().sub(E).normalize();
     [-1, 1].forEach((sg, j) => {
-      const a = E.clone().addScaledVector(t, sg), b = Pp.clone().addScaledVector(t, sg);
-      placeRod(A.rods[j], a, b); A.balls[j * 2].position.copy(a); A.balls[j * 2 + 1].position.copy(b);
+      const a = E.clone().addScaledVector(tangent, sg * 0.028), b = Pp.clone().addScaledVector(tangent, sg * 0.028);
+      placeRod(A.rods[j], a, b);
+      A.cups[j].forEach((cup, end) => { cup.position.copy(end ? b : a); cup.quaternion.setFromUnitVectors(V(0, 0, 1), direction.clone().multiplyScalar(end ? -1 : 1)); });
     });
+    [E, Pp].forEach((end, k) => [-1, 1].forEach((sg, j) => {
+      const centre = end.clone().addScaledVector(direction, sg * 0.012);
+      placeRod(A.springs[k * 2 + j], centre.clone().addScaledVector(tangent, -0.028), centre.clone().addScaledVector(tangent, 0.028));
+    }));
+    if (i === 0) {
+      const radial = V(A.s, -A.c, 0);
+      const clips = [0.3, 0.7].map((f, j) => {
+        const point = E.clone().lerp(Pp, f).addScaledVector(tangent, 0.028).addScaledVector(radial, 0.010);
+        deltaHoseClips[j].position.copy(point); deltaHoseClips[j].quaternion.setFromUnitVectors(V(0, 0, 1), direction); return point;
+      });
+      hosePoints = [deltaHoseStart, E.clone().addScaledVector(radial, 0.030), ...clips, V(p[0] + 0.0245, p[1], p[2] + 0.0375)];
+    }
+  });
+  updateTube(deltaHose, hosePoints);
+  deltaLastPose = { p: [...p], ang: [...ang] };
+}
+// Check actual mesh endpoints against independently parented link ball centres for every sample.
+// Includes the rod geometry centre: a displaced mesh/geometry cannot pass by checking shared inputs.
+function deltaCheck() {
+  const saved = deltaLastPose;
+  let maxMM = 0;
+  try {
+    if (!S.dp.length || S.dp.length !== S.da.length) throw new Error("Missing delta samples");
+    for (let n = 0; n < S.dp.length; n++) {
+      setDelta(S.dp[n], S.da[n]); world.updateWorldMatrix(true, true);
+      for (const A of deltaArms) A.rods.forEach((bar, j) => {
+        bar.geometry.computeBoundingBox();
+        const bounds = bar.geometry.boundingBox, centre = bounds.getCenter(V(0, 0, 0));
+        for (const [y, ball] of [[bounds.max.y, A.plateBalls[j]], [bounds.min.y, A.elbowBalls[j]]]) {
+          const end = bar.localToWorld(V(centre.x, y, centre.z)), target = ball.getWorldPosition(V(0, 0, 0));
+          const mm = end.distanceTo(target) * 1000;
+          if (!Number.isFinite(mm)) throw new Error("Non-finite delta endpoint error");
+          maxMM = Math.max(maxMM, mm);
+        }
+      });
+    }
+  } finally { if (saved) setDelta(saved.p, saved.ang); }
+  return maxMM;
+}
+setDelta(S.dp[0], S.da[0]);
+window.pcHooks = Object.assign(window.pcHooks || {}, { deltaCheck });
+// ---------------------------------------------------------------- T3-401S: mounting-face coordinates, metres; plan §6.1.
+function arm2Outline() {            // convex hull of the front circle around J3 and the rounded rear block
+  const P = [];
+  for (let i = 0; i < 360; i += 6) { const a = i * RAD; P.push([0.175 + 0.048 * Math.cos(a), 0.048 * Math.sin(a)]); }
+  for (const [cx, cy, a0] of [[0.088, 0.0427, 0], [-0.048, 0.0427, 90], [-0.048, -0.0427, 180], [0.088, -0.0427, 270]])
+    for (let i = 0; i <= 90; i += 10) { const a = (a0 + i) * RAD; P.push([cx + 0.022 * Math.cos(a), cy + 0.022 * Math.sin(a)]); }
+  P.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const p of P) { while (lo.length > 1 && cross(lo.at(-2), lo.at(-1), p) <= 0) lo.pop(); lo.push(p); }
+  for (const p of P.slice().reverse()) { while (up.length > 1 && cross(up.at(-2), up.at(-1), p) <= 0) up.pop(); up.push(p); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));   // ~51 points; check: max x 0.2230, max |y| 0.0647, min x -0.0700
+}
+// Merge only direct static meshes: joint groups and independently moving fingers stay separate.
+function mergeT3Link(group) {
+  const batches = new Map();
+  for (const o of [...group.children]) {
+    if (!o.isMesh || o.isInstancedMesh) continue;
+    o.updateMatrix();
+    let g = o.geometry.clone();
+    if (g.index) { const old = g; g = g.toNonIndexed(); old.dispose(); }
+    g.applyMatrix4(o.matrix);
+    for (const key of Object.keys(g.attributes)) if (!["position", "normal", "uv"].includes(key)) g.deleteAttribute(key);
+    if (!g.attributes.uv) g.setAttribute("uv", new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    if (!batches.has(o.material)) batches.set(o.material, []);
+    batches.get(o.material).push(g);
+    group.remove(o); o.geometry.dispose();
+  }
+  return [...batches].map(([material, geometries]) => {
+    const geo = BufferGeometryUtils.mergeGeometries(geometries, false);
+    if (!geo) throw new Error("T3 geometry merge failed");
+    geometries.forEach((g) => g.dispose());
+    return mesh(geo, material, group);
   });
 }
-
-// ---------------------------------------------------------------- Epson T3 models (procedural, proportions of the T3-401S)
+// Decorative details not dimensioned by the manual: connector spacing, recesses,
+// bevels (0.5 mm), vent holes (6 mm), tag size and screw sockets are visual approximations.
+function t3Cylinder(r, z0, z1, material, x, y, parent) {
+  const b = Math.min(0.0005, (z1 - z0) / 4, r / 4);
+  const o = lathe([[0, z0], [r - b, z0], [r, z0 + b], [r, z1 - b], [r - b, z1], [0, z1]], material, parent);
+  o.position.set(x, y, 0); return o;
+}
+function t3Texture(kind) {
+  const c = document.createElement("canvas"); c.width = c.height = 256;
+  const ctx = c.getContext("2d"); ctx.fillStyle = "#aaa"; ctx.fillRect(0, 0, 256, 256);
+  if (kind === "vent") {
+    ctx.fillStyle = "#111";
+    for (let row = 0; row < 6; row++) for (let col = 0; col < 4; col++) {
+      ctx.beginPath(); ctx.ellipse(32 + col * 64, 21 + row * 43, 17, 12, 0, 0, 2 * Math.PI); ctx.fill();
+    }
+  } else {
+    ctx.strokeStyle = "#333"; ctx.lineWidth = 6;
+    for (let i = -256; i <= 512; i += 64) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(256, i + 64); ctx.stroke(); }
+  }
+  const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  if (kind !== "vent") tex.repeat.set(1, 10);
+  return tex;
+}
+const t3ShaftMaterial = M.chrome.clone();
+t3ShaftMaterial.bumpMap = t3Texture("shaft"); t3ShaftMaterial.bumpScale = 0.00035;
+const t3VentMaterial = M.t3Dark.clone(); t3VentMaterial.map = t3Texture("vent");
+t3VentMaterial.map.colorSpace = THREE.SRGBColorSpace;
+const t3LedMaterial = M.lampAmber.clone(); t3LedMaterial.emissive.setHex(0xffa020); t3LedMaterial.emissiveIntensity = 1;
 function buildT3(sd) {
-  const accent = mat(new THREE.Color(sd.i ? 0x8a3db5 : 0x2f4fb8), 0.4, 0.1);
-  const base = new THREE.Group(); base.position.set(sd.x, sd.y, 0); base.rotation.z = sd.face - Math.PI; world.add(base);
-  const baseL = 0.235, baseW = 0.16, baseH = T3.zArm - 0.03;
-  box(baseL, baseW, baseH, M.t3, baseL / 2 - 0.075, 0, baseH / 2, base);
-  box(0.006, baseW * 0.7, baseH * 0.55, M.t3Dark, baseL - 0.075 + 0.003, 0, baseH * 0.45, base);
-  for (const sy of [-1, 1]) box(0.07, 0.003, 0.02, accent, 0.04, sy * (baseW / 2 + 0.001), baseH - 0.03, base);
-  vcyl(0.075, 0.03, M.t3, 0, 0, baseH + 0.015, 48, base);
-  const j1 = new THREE.Group(); j1.position.set(0, 0, T3.zArm); base.add(j1);
-  stadium(T3.L1, 0.06, 0.05, M.t3, j1);
-  vcyl(0.062, 0.006, M.t3Dark, 0, 0, 0.058, 48, j1);
-  const j2 = new THREE.Group(); j2.position.set(T3.L1, 0, 0.06); j1.add(j2);
-  vcyl(0.05, 0.01, M.t3Dark, 0, 0, -0.002, 40, j2);
-  stadium(T3.L2, 0.052, 0.05, M.t3, j2).position.z = 0.006;
-  box(T3.L2 * 0.55, 0.09, 0.07, M.t3, T3.L2 * 0.55, 0, 0.09, j2);
-  for (const sy of [-1, 1]) box(0.06, 0.003, 0.018, accent, T3.L2 * 0.55, sy * 0.046, 0.1, j2);
-  vcyl(0.045, 0.12, M.t3, T3.L2, 0, 0.06, 40, j2);
+  const root = new THREE.Group(); root.position.set(sd.x, sd.y, T3G.riser); root.rotation.z = sd.face; world.add(root);
+  // Pedestal remains separate from proc.base so the optional CAD can replace the robot alone.
+  const pedestal = new THREE.Group(); root.add(pedestal);
+  rbox(0.210, 0.170, 0.015, 0.003, M.aluClear, -0.055, 0, -0.0075, pedestal);
+  rbox(0.240, 0.200, 0.015, 0.003, M.aluClear, -0.055, 0, -0.1275, pedestal);
+  for (const x of [-0.135, 0.025]) for (const y of [-0.060, 0.060]) profileBeam(V(x, y, -0.120), V(x, y, -0.015), pedestal);
+  const tag = labelPlane(sd.letter, 0.035, 0.012, { bg: sd.i ? "#8a3db5" : "#2f4fb8", fg: "#ffffff" });
+  tag.position.set(0.0651, 0, -0.1275); tag.rotation.set(Math.PI / 2, 0, Math.PI / 2); pedestal.add(tag);
+  mergeT3Link(pedestal);
+  const base = new THREE.Group(); root.add(base);
+  rbox(0.180, 0.142, 0.008, 0.0035, M.t3White, -0.055, 0, 0.004, base);
+  for (const x of [0.020, -0.100]) for (const y of [-0.060, 0.060]) t3Cylinder(0.0065, 0.008, 0.016, M.t3Dark, x, y, base);
+  rbox(0.172, 0.120, 0.178, 0.010, M.t3White, -0.054, 0, 0.097, base);
+  rbox(0.076, 0.120, 0.062, 0.006, M.t3White, -0.102, 0, 0.211, base);
+  extrudeXZ([[0, 0.236], [-0.145, 0.236], [-0.145, 0.356], [-0.085, 0.416], [0, 0.416]], -0.062, 0.062, M.t3White, base, 0.004);
+  t3Cylinder(0.052, 0.236, 0.416, M.t3White, 0, 0, base);
+  const vent = rbox(0.075, 0.090, 0.001, 0.0004, t3VentMaterial, -0.1154, 0, 0.3864, base); vent.rotation.y = -Math.PI / 4;
+  const led = mesh(new THREE.SphereGeometry(0.009, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), t3LedMaterial, base);
+  led.rotation.x = Math.PI / 2; led.position.set(-0.040, 0.030, 0.416);
+  rbox(0.002, 0.090, 0.150, 0.0005, M.t3Dark, -0.141, 0, 0.100, base);
+  // Rear connector dimensions follow the table; small port recesses approximate the drawing.
+  for (const z of [0.095, 0.145]) rbox(0.004, 0.012, 0.045, 0.001, M.steel, -0.144, 0.012, z, base);
+  rbox(0.006, 0.040, 0.012, 0.002, M.steel, -0.145, 0, 0.077, base);
+  rbox(0.008, 0.014, 0.015, 0.001, M.steel, -0.146, 0.030, 0.113, base);
+  rbox(0.009, 0.009, 0.010, 0.001, M.blackPlastic, -0.147, 0.030, 0.113, base);
+  rbox(0.007, 0.012, 0.006, 0.001, M.steel, -0.145, 0.030, 0.139, base);
+  rbox(0.008, 0.009, 0.003, 0.0005, M.blackPlastic, -0.146, 0.030, 0.139, base);
+  rbox(0.010, 0.050, 0.040, 0.003, M.t3Dark, -0.147, 0, 0.048, base);
+  for (const [z, r, material] of [[0.085, 0.003, M.puBlue], [0.106, 0.003, M.puBlue], [0.127, 0.002, M.puBlue], [0.148, 0.003, M.whitePOM]]) {
+    const fitting = t3Cylinder(r, 0, 0.012, material, 0, 0, base); fitting.rotation.y = -Math.PI / 2; fitting.position.set(-0.142, -0.030, z);
+  }
+  const tp = t3Cylinder(0.012, 0, 0.008, M.t3Dark, 0, 0, base); tp.rotation.y = -Math.PI / 2; tp.position.set(-0.145, 0, 0.313);
+  t3Cylinder(0.022, 0.416, 0.446, M.t3Dark, 0, 0, base);
+  const j1 = new THREE.Group(); root.add(j1);
+  const arm1 = stadium(T3.L1, 0.039, 0.035, M.t3White, j1);
+  // Normalize the helper's bevel-inclusive bounds to the exact table dimensions.
+  arm1.geometry.computeBoundingBox();
+  const bounds = arm1.geometry.boundingBox, size = bounds.getSize(V());
+  arm1.geometry.translate(-bounds.min.x, -bounds.min.y, -bounds.min.z);
+  arm1.geometry.scale((T3.L1 + 0.078) / size.x, 0.078 / size.y, 0.035 / size.z);
+  arm1.geometry.translate(-0.039, -0.039, T3G.a1[0]);
+  t3Cylinder(0.045, 0.186, 0.192, M.t3Dark, 0, 0, j1);
+  const points = [V(0, 0, 0.446), V(0, 0, 0.486)];
+  for (let i = 1; i <= 24; i++) { const a = Math.PI - i * Math.PI / 24; points.push(V(0.1125 + 0.1125 * Math.cos(a), 0, 0.486 + 0.1125 * Math.sin(a))); }
+  points.push(V(0.225, 0, 0.4427)); tubeAlong(points, T3G.ductR, M.duct, j1, 96, 16);
+  const j2 = new THREE.Group(); j2.position.set(T3.L1, 0, 0); j1.add(j2);
+  t3Cylinder(0.035, 0.2273, 0.2362, M.t3Dark, 0, 0, j2);
+  extrudeXY(arm2Outline(), 0.2362, 0.388, M.t3White, j2, 0.005);
+  extrudeXZ([[-0.070, 0.383], [0.135, 0.383], [0.010, 0.4127], [-0.070, 0.4127]], -0.060, 0.060, M.t3White, j2, 0.005);
+  t3Cylinder(0.040, 0.214, 0.398, M.t3White, 0.175, 0, j2);
+  lathe([[0.030, 0.205], [0.040, 0.236]], M.t3White, j2).position.x = 0.175;
+  t3Cylinder(0.030, 0.398, 0.404, M.t3Dark, 0.175, 0, j2);
+  t3Cylinder(0.041, 0.2345, 0.2375, M.t3Dark, 0.175, 0, j2);
+  t3Cylinder(0.022, 0.4127, 0.4427, M.t3Dark, 0, 0, j2);
+  rbox(0.031, 0.013, 0.006, 0.001, M.t3Dark, 0.040, 0.025, 0.410, j2);
+  for (const [x, y, r] of [[0.045, -0.022, 0.003], [0.065, -0.022, 0.003], [0.065, 0, 0.002]]) t3Cylinder(r, 0.405, 0.417, M.puBlue, x, y, j2);
+  t3Cylinder(0.006, 0.389, 0.395, M.t3Dark, 0.110, 0.022, j2);
   const quill = new THREE.Group(); world.add(quill);
-  vcyl(0.008, 0.33, M.steel, 0, 0, 0.045 + 0.165, 20, quill);
-  vcyl(0.012, 0.012, M.t3Dark, 0, 0, 0.045 + 0.33, 20, quill);
+  t3Cylinder(0.008, T3G.tool, T3G.tool + T3G.shaftLen, t3ShaftMaterial, 0, 0, quill);
+  t3Cylinder(0.015, 0.4157, 0.4277, M.steel, 0, 0, quill);
+  t3Cylinder(0.015, 0.105, 0.115, M.steel, 0, 0, quill);
   const gripper = new THREE.Group(); quill.add(gripper);
-  box(0.034, 0.046, 0.026, M.t3Dark, 0, 0, 0.033, gripper);
-  const fingers = [-1, 1].map((sg) => { const f = box(0.012, 0.006, 0.030, M.silicone, 0, 0, 0.006, gripper); f.userData.sg = sg; return f; });
-  return { sd, j1, j2, quill, gripper, fingers };
+  t3Cylinder(0.016, 0.055, 0.075, M.aluDark, 0, 0, gripper);
+  rbox(0.034, 0.046, 0.030, 0.003, M.aluDark, 0, 0, 0.040, gripper);
+  rbox(0.010, 0.050, 0.006, 0.0015, M.aluDark, 0, 0, 0.025, gripper);
+  for (const y of [-0.012, 0.012]) { const f = t3Cylinder(0.003, 0, 0.010, M.puBlue, 0, 0, gripper); f.rotation.y = Math.PI / 2; f.position.set(0.017, y, 0.045); }
+  mergeT3Link(gripper);
+  const fingers = [-1, 1].map((sg) => { const f = rbox(0.012, 0.008, 0.030, 0.002, M.siliconeBlue, 0, sg * 0.022, 0.010, gripper); f.userData.sg = sg; return f; });
+  const proc = { base: mergeT3Link(base), arm1: mergeT3Link(j1), arm2: mergeT3Link(j2), shaft: mergeT3Link(quill) };
+  return { sd, root, j1, j2, quill, gripper, fingers, proc };
 }
 const t3Models = SIDES.map(buildT3);
 function setT3(m, q, grip) {
-  m.j1.rotation.z = Math.PI + q[0];
-  m.j2.rotation.z = q[1];
-  const k = t3FK(m.sd, q);
-  m.quill.position.set(k.j3[0], k.j3[1], q[2]);
-  m.gripper.rotation.z = k.yaw;
+  m.j1.rotation.z = q[0]; m.j2.rotation.z = q[1];
+  const k = t3FK(m.sd, q); m.quill.position.set(k.j3[0], k.j3[1], q[2]); m.gripper.rotation.z = k.yaw;
   const half = lerp(0.022, PW / 2 + 0.002, grip);
   m.fingers.forEach((f) => { f.position.y = f.userData.sg * half; });
 }
-
+function t3Check() {
+  let maxMM = 0;
+  for (const m of t3Models) {
+    const saved = [m.j1.rotation.z, m.j2.rotation.z];
+    try {
+      for (let i = 0; i < 20; i++) {
+        const q = [(Math.random() * 2 - 1) * T3.lim1 * RAD, (Math.random() * 2 - 1) * T3.lim2 * RAD, T3.zTop, 0];
+        m.j1.rotation.z = q[0]; m.j2.rotation.z = q[1]; m.root.updateWorldMatrix(true, true);
+        const p = m.j2.localToWorld(V(T3.L2, 0, 0)), expected = t3FK(m.sd, q).j3;
+        // world may be rotated for display; compare in the cell's z-up coordinates.
+        world.worldToLocal(p);
+        const mm = Math.hypot(p.x - expected[0], p.y - expected[1]) * 1000;
+        if (!Number.isFinite(mm)) throw new Error("Non-finite T3 kinematic check");
+        maxMM = Math.max(maxMM, mm);
+      }
+    } finally { m.j1.rotation.z = saved[0]; m.j2.rotation.z = saved[1]; m.root.updateWorldMatrix(true, true); }
+  }
+  return maxMM;
+}
+window.pcHooks = Object.assign(window.pcHooks || {}, { t3Check });
 // paths
 function pathLine(points, colorVar) {
   const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(points.flat()), 3));
