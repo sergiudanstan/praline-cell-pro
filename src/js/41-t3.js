@@ -121,10 +121,10 @@ function buildT3(sd) {
   t3Cylinder(0.006, 0.389, 0.395, M.t3Dark, 0.110, 0.022, j2);
   const quill = new THREE.Group(); world.add(quill);
   t3Cylinder(0.008, T3G.tool, T3G.tool + T3G.shaftLen, t3ShaftMaterial, 0, 0, quill);
-  t3Cylinder(0.015, 0.4157, 0.4277, M.steel, 0, 0, quill);
-  t3Cylinder(0.015, 0.105, 0.115, M.steel, 0, 0, quill);
+  t3Cylinder(0.015, T3G.tool + T3G.shaftLen - 0.012, T3G.tool + T3G.shaftLen, M.steel, 0, 0, quill);   // upper stop collar at the shaft top
+  t3Cylinder(0.015, T3G.tool + 0.030, T3G.tool + 0.040, M.steel, 0, 0, quill);                         // lower mechanical stop, 30 mm above the shaft end
   const gripper = new THREE.Group(); quill.add(gripper);
-  t3Cylinder(0.016, 0.055, 0.075, M.aluDark, 0, 0, gripper);
+  t3Cylinder(0.016, 0.055, T3G.tool, M.aluDark, 0, 0, gripper);                                         // split-muff coupling up to the shaft end
   rbox(0.034, 0.046, 0.030, 0.003, M.aluDark, 0, 0, 0.040, gripper);
   rbox(0.010, 0.050, 0.006, 0.0015, M.aluDark, 0, 0, 0.025, gripper);
   for (const y of [-0.012, 0.012]) { const f = t3Cylinder(0.003, 0, 0.010, M.puBlue, 0, 0, gripper); f.rotation.y = Math.PI / 2; f.position.set(0.017, y, 0.045); }
@@ -160,3 +160,92 @@ function t3Check() {
   return maxMM;
 }
 window.pcHooks = Object.assign(window.pcHooks || {}, { t3Check });
+
+// Optional official CAD: never requested from public hosts or with ?cad=0.
+function restoreProceduralT3() {
+  for (const m of t3Models) {
+    if (m.cad) { Object.values(m.cad).forEach((o) => o.removeFromParent()); delete m.cad; }
+    Object.values(m.proc).flat().forEach((o) => { o.visible = true; });
+  }
+  document.getElementById("t3-cad-badge")?.remove();
+}
+function cadCheck() {
+  if (!t3Models.every((m) => m.cad)) return null; // No CAD is not a successful CAD check.
+  world.updateWorldMatrix(true, true);
+  let maxMM = 0;
+  for (const m of t3Models) {
+    const centre = world.worldToLocal(m.cad.shaft.localToWorld(V(0, -0.15, 0)));
+    const q = [m.j1.rotation.z, m.j2.rotation.z, m.quill.position.z, 0];
+    const expected = t3FK(m.sd, q).j3;
+    const mm = Math.hypot(centre.x - expected[0], centre.y - expected[1]) * 1000;
+    maxMM = Number.isFinite(mm) ? Math.max(maxMM, mm) : Infinity;
+  }
+  if (maxMM > 2) {
+    console.warn("[praline] CAD shaft alignment failed (mm):", maxMM, "— using procedural T3");
+    restoreProceduralT3();
+  }
+  return maxMM;
+}
+async function tryLoadCadT3() {
+  if (!["localhost", "127.0.0.1"].includes(location.hostname) || new URLSearchParams(location.search).get("cad") === "0") return;
+  try {
+    if (!(await fetch("_cad/t3.glb", { method: "HEAD" })).ok) return;
+    const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
+    const gltf = await new GLTFLoader().loadAsync("_cad/t3.glb");
+    const specs = [
+      ["NAUO1", "base", "root", [-0.145, 0, 0]],
+      ["NAUO2", "arm1", "j1", [0, 0, 0.1923]],
+      ["NAUO3", "arm2", "j2", [0.175, 0, 0.2392]],
+      ["NAUO4", "shaft", "quill", [0, 0, T3G.tool + 0.32]],
+      ["NAUO5", "cable", "j1", [0, 0, 0.4103]],
+    ];
+    for (const [name, part] of specs) {
+      const nodes = gltf.parser.json.nodes.filter((n) => n.name === name);
+      if (nodes.length !== 1 || gltf.parser.json.meshes[nodes[0].mesh]?.name !== `T3-401S_${part}`) throw new Error(`Unexpected CAD node/mesh: ${name}/${part}`);
+    }
+    const materials = { mat_0: M.t3White, mat_1: M.lampAmber, mat_2: M.t3Grey, mat_3: M.t3Dark, mat_4: M.puBlue, mat_5: M.chrome };
+    // Stage both robots before changing visibility; a malformed asset leaves the fallback intact.
+    const prepared = t3Models.map((m) => {
+      const scene = gltf.scene.clone(true), cad = {};
+      for (const [name, part, parent, position] of specs) {
+        const object = scene.getObjectByName(name);
+        if (!object) throw new Error(`Missing CAD object: ${name}`);
+        let meshes = 0;
+        object.traverse((o) => {
+          if (!o.isMesh) return;
+          meshes++;
+          const mapped = (material) => {
+            if (!materials[material.name]) throw new Error(`Unknown CAD material: ${material.name}`);
+            return materials[material.name];
+          };
+          o.material = Array.isArray(o.material) ? o.material.map(mapped) : mapped(o.material);
+          o.castShadow = o.receiveShadow = true;
+        });
+        if (!meshes) throw new Error(`Empty CAD object: ${name}`);
+        object.matrixAutoUpdate = true;
+        object.position.set(...position);
+        object.quaternion.setFromAxisAngle(V(1, 0, 0), Math.PI / 2);
+        object.scale.set(1, 1, 1); object.updateMatrix();
+        cad[part] = object;
+      }
+      return { m, cad };
+    });
+    for (const { m, cad } of prepared) {
+      m.cad = cad;
+      for (const [, part, parent] of specs) m[parent].add(cad[part]);
+    }
+    const errorMM = cadCheck();
+    if (errorMM === null || errorMM > 2) return;
+    for (const m of t3Models) Object.values(m.proc).flat().forEach((o) => { o.visible = false; });
+    const badge = document.createElement("span"); badge.id = "t3-cad-badge"; badge.textContent = "CAD (local)";
+    badge.style.cssText = "font-size:11px;padding:4px 8px;border:1px solid currentColor;border-radius:4px;white-space:nowrap";
+    document.querySelector("header")?.appendChild(badge);
+  } catch (error) {
+    restoreProceduralT3();
+    console.warn("[praline] Local CAD unavailable — using procedural T3:", error);
+  }
+}
+window.pcHooks = Object.assign(window.pcHooks || {}, { cadCheck });
+// The loop publishes pc later in this same module; keep this hook usable before G4's hook integration.
+queueMicrotask(() => { if (window.pc) window.pc.cadCheck = cadCheck; });
+tryLoadCadT3();

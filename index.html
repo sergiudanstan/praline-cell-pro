@@ -426,10 +426,11 @@ const DELTA = { cx: 0.0, cy: 0.0, zb: 0.82, F: 0.100, E: 0.035, RF: 0.200, RE: 0
                 lim: [-40, 95], arms: [90, 210, 330] };
 // Epson T3-401S: 225 + 175 mm arms, 150 mm Z stroke, J1 ±132°, J2 ±141°, J4 ±360°.
 const T3 = { L1: 0.225, L2: 0.175, zTop: 0.21, stroke: 0.150, lim1: 132, lim2: 141, lim4: 360 };
-// Real T3-401S envelope from Epson's outer-dimension drawing, metres above the T3 mounting face.
-// The T3 stands on a riser: shaft end at stroke top is 150 mm above the mounting face, so riser + 0.150 - tool = T3.zTop.
-const T3G = { riser: 0.135, tool: 0.075, a1: [0.1923, 0.2273], a2: [0.2362, 0.4127], a2Front: 0.0478, a2Rear: 0.070,
-              shaftLen: 0.3407, ductBase: 0.446, ductTop: 0.5985, ductR: 0.017 };
+// Real T3-401S envelope from Epson's outer-dimension drawing (heights checked against Epson's CAD), metres above the T3 mounting face.
+// Shaft 330 mm long, its end 160.7 mm above the mounting face at the stroke top (J3 = 0). The T3 stands on a riser,
+// so riser + shaftEnd0 - tool = T3.zTop (the TCP is the fingertip centre, tool = shaft end to TCP).
+const T3G = { riser: 0.135, tool: 0.0857, a1: [0.1923, 0.2273], a2: [0.2362, 0.4127], a2Front: 0.0478, a2Rear: 0.070,
+              shaftEnd0: 0.1607, shaftLen: 0.330, ductBase: 0.446, ductTop: 0.5985, ductR: 0.017 };
 // Belt what-if: seconds per 75 mm index. index0 reproduces the validated 42.51 s cycle.
 const BELT = { index0: 0.70, index: 0.70, min: 0.35, max: 2.80, step: 0.05 };
 const SAFE_DELTA = 0.215, SAFE_T3 = 0.20;                // approach heights (TCP z)
@@ -773,12 +774,13 @@ console.log("[praline] duration", DURATION.toFixed(2), "ikFail", ikFail, "minCle
 
 // ================================================================ scene
 const viewport = $("viewport");
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance", preserveDrawingBuffer: true });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
 renderer.domElement.classList.add("main");
 viewport.prepend(renderer.domElement);
 
@@ -787,20 +789,181 @@ const camera = new THREE.PerspectiveCamera(34, 1, 0.02, 30);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.495;
-controls.minDistance = 0.35; controls.maxDistance = 7;
+controls.minDistance = 0.35;
+controls.maxDistance = 7;
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x8a837e, 1.15));
-const sun = new THREE.DirectionalLight(0xfffaf3, 2.1);
-sun.position.set(1.4, 2.6, 1.1); sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -1.5, right: 1.5, top: 1.5, bottom: -1.5, near: 0.5, far: 7 });
-sun.shadow.bias = -0.0004;
-scene.add(sun);
-const fillL = new THREE.DirectionalLight(0xe6ecff, 0.55); fillL.position.set(-1.6, 1.2, -1.3); scene.add(fillL);
+// Lights live in scene space (y up). world is rotated -90° about x, as before.
+const hemi = new THREE.HemisphereLight(0xffffff, 0x8a837e, 0.2);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff4e8, 2.4);
+sun.position.set(2.0, 3.4, 1.8);
+sun.target.position.set(0, 0.3, 0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.radius = 4;
+sun.shadow.bias = -0.0002;
+sun.shadow.normalBias = 0.002;
+Object.assign(sun.shadow.camera, { left: -1.7, right: 1.7, top: 1.7, bottom: -1.7, near: 0.5, far: 9 });
+sun.shadow.camera.updateProjectionMatrix();
+scene.add(sun, sun.target);
+const fillL = new THREE.DirectionalLight(0xdde6ff, 0.45);
+fillL.position.set(-2.2, 1.6, -1.6);
+scene.add(fillL);
+const rimL = new THREE.DirectionalLight(0xffffff, 0.6);
+rimL.position.set(-0.6, 2.4, 2.8);
+scene.add(rimL);
 
-const world = new THREE.Group(); world.rotation.x = -Math.PI / 2; scene.add(world);
+const world = new THREE.Group();
+world.rotation.x = -Math.PI / 2;
+scene.add(world);
 
-const mat = (color, roughness = 0.5, metalness = 0.1, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness, metalness, ...extra });
+// Room environment (no external HDR). PMREM runs before renderer.render is wrapped.
+const pmrem = new THREE.PMREMGenerator(renderer);
+const room = new RoomEnvironment();
+scene.environment = pmrem.fromScene(room, 0.04).texture;
+pmrem.dispose();
+const roomGeos = new Set(), roomMats = new Set();
+room.traverse((o) => {
+  if (o.geometry) roomGeos.add(o.geometry);
+  const list = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+  list.forEach((m) => roomMats.add(m));
+});
+roomGeos.forEach((g) => g.dispose());
+roomMats.forEach((m) => m.dispose());
+
+function themeIsDark() {
+  const t = document.documentElement.dataset.theme;
+  if (t === "dark") return true;
+  if (t === "light") return false;
+  return matchMedia("(prefers-color-scheme: dark)").matches;
+}
+function syncSceneTheme() {
+  const bottom = css("--scene-bottom") || "#e4dfda";
+  if (!scene.fog) scene.fog = new THREE.Fog(new THREE.Color(bottom), 7, 18);
+  else scene.fog.color.set(bottom);
+  scene.environmentIntensity = themeIsDark() ? 0.5 : 0.7;
+}
+syncSceneTheme();
+window.addEventListener("themechange", syncSceneTheme);
+
+// Composer: MSAA on the target (samples 4). Logical size is corrected just below —
+// passing a pixel-sized target makes EffectComposer treat that size as CSS pixels.
+function viewSize() {
+  return { w: Math.max(1, viewport.clientWidth), h: Math.max(1, viewport.clientHeight) };
+}
+const view0 = viewSize();
+const dpr0 = Math.min(devicePixelRatio || 1, 2);
+renderer.setPixelRatio(dpr0);
+renderer.setSize(view0.w, view0.h, false);
+const composerTarget = new THREE.WebGLRenderTarget(Math.floor(view0.w * dpr0), Math.floor(view0.h * dpr0), {
+  type: THREE.HalfFloatType,
+  samples: 4,
+});
+const composer = new EffectComposer(renderer, composerTarget);
+composer.setSize(view0.w, view0.h);
+const gtao = new GTAOPass(scene, camera, view0.w, view0.h);
+gtao.updateGtaoMaterial({ radius: 0.15, distanceExponent: 1.5, thickness: 1.5, scale: 1.0, samples: 12 });
+gtao.blendIntensity = 0.85;
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(gtao);
+composer.addPass(new OutputPass());
+
+function fitComposer() {
+  const { w, h } = viewSize();
+  const dpr = renderer.getPixelRatio();
+  renderer.setSize(w, h, false);
+  composer.setPixelRatio(dpr);
+  composer.setSize(w, h);
+}
+new ResizeObserver(fitComposer).observe(viewport);
+
+function writeHqBox(on) {
+  const box = document.getElementById("hq");
+  if (box) box.checked = on;
+  document.querySelectorAll("label.toggle").forEach((lab) => {
+    if (lab.textContent.replace(/\s+/g, " ").trim() !== "HQ") return;
+    const input = lab.querySelector("input");
+    if (input) input.checked = on;
+  });
+}
+let hq = true;
+function shadowMapSize(px) {
+  sun.shadow.mapSize.set(px, px);
+  if (sun.shadow.map) {
+    sun.shadow.map.dispose();
+    sun.shadow.map = null;
+  }
+}
+function setQuality(on) {
+  hq = !!on;
+  try { localStorage.setItem("praline-pro-hq", hq ? "1" : "0"); } catch (e) {}
+  gtao.enabled = hq;
+  shadowMapSize(hq ? 4096 : 2048);
+  renderer.setPixelRatio(hq ? Math.min(devicePixelRatio || 1, 2) : 1);
+  fitComposer();
+  writeHqBox(hq);
+  return hq;
+}
+function storedHq() {
+  try {
+    const v = localStorage.getItem("praline-pro-hq");
+    if (v === "0" || v === "1") return v === "1";
+  } catch (e) {}
+  return null;
+}
+function autoHq() {
+  if (matchMedia("(pointer: coarse)").matches) return false;
+  if (viewport.clientWidth > 0 && viewport.clientWidth < 900) return false;
+  return true;
+}
+setQuality(storedHq() !== null ? storedHq() : autoHq());
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (t && t.id === "hq") setQuality(t.checked);
+});
+
+// The loop in 70-loop.js calls renderer.render until G4 switches it to renderFrame().
+// Passes keep the native call. finalizeProfiles() runs on the first frame.
+const nativeRender = renderer.render.bind(renderer);
+let rendering = false;
+let profilesArmed = false;
+let watchT0 = 0, watchLast = 0, watchSum = 0, watchN = 0, watchDone = false;
+function noteFrameTime() {
+  if (watchDone) return;
+  const now = performance.now();
+  if (watchT0 === 0) { watchT0 = watchLast = now; return; }
+  watchSum += now - watchLast;
+  watchN += 1;
+  watchLast = now;
+  if (now - watchT0 < 3000) return;
+  watchDone = true;
+  const avg = watchN ? watchSum / watchN : 0;
+  const tripped = avg > 28 && hq;
+  if (tripped) setQuality(false);
+  window.__hqStats = { avgMs: avg, tripped };
+}
+function renderFrame() {
+  if (!profilesArmed) { profilesArmed = true; finalizeProfiles(); }
+  if (rendering) return;
+  rendering = true;
+  try { composer.render(); }
+  finally { rendering = false; }
+  noteFrameTime();
+}
+renderer.render = function (s, c) {
+  if (rendering) return nativeRender(s, c);
+  renderFrame();
+};
+window.setQuality = setQuality;
+const mat = (color, roughness = 0.5, metalness = 0.1, extra = {}) => {
+  const physical = (extra.clearcoat > 0) || (extra.transmission > 0) || (extra.sheen > 0);
+  const Ctor = physical ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
+  return new Ctor({ color, roughness, metalness, ...extra });
+};
+const phys = (color, roughness, metalness, extra = {}) => new THREE.MeshPhysicalMaterial({ color, roughness, metalness, ...extra });
+
+// Old keys stay until the last old builder is replaced (cleanup at the end). aluDark, steel and t3Dark
+// are overwritten below with the hi-fi values; the names the old builders still use are the ones in §4.2b.
 const M = {
   alu: mat(0xc3c8ce, 0.35, 0.7), aluDark: mat(0x9aa1a8, 0.4, 0.7), table: mat(0xb4b9bf, 0.5, 0.6), top: mat(0xdfe2e5, 0.32, 0.75),
   black: mat(0x26292d, 0.55, 0.3), carbon: mat(0x1d1f22, 0.35, 0.4), white: mat(0xf4f4f2, 0.5, 0.0),
@@ -811,29 +974,188 @@ const M = {
   tunnel: mat(0xe9ecef, 0.3, 0.7), cold: mat(0x9fd3f5, 0.4, 0, { emissive: 0x2b6c99, emissiveIntensity: 0.6 }),
   glass: new THREE.MeshPhysicalMaterial({ color: 0xd8e6ee, roughness: 0.05, transparent: true, opacity: 0.12, depthWrite: false }),
 };
-const FLAVOUR_MAT = { dark: mat(0x3a2016, 0.38, 0.05), milk: mat(0x7b4a2d, 0.45, 0.04), ruby: mat(0xb8435f, 0.4, 0.04) };
-const BLOOM_MAT = { dark: mat(0x8f8279, 0.95, 0), milk: mat(0xa99282, 0.95, 0), ruby: mat(0xcfa3ad, 0.95, 0) };
-// Contract keys of the hi-fi build (plan §4.3). T0 stubs with the final colours; G1 turns them into physical materials with textures.
-// The old keys above stay until every old builder is replaced (cleanup at the end).
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function procTex(w, h, seed, paint, { color = false, repeat = [1, 1] } = {}) {
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d");
+  const img = g.createImageData(w, h);
+  paint(img.data, w, h, mulberry32(seed));
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  if (color) tex.colorSpace = THREE.SRGBColorSpace;
+  tex.repeat.set(repeat[0], repeat[1]);
+  return tex;
+}
+function put(data, i, r, g, b, a = 255) {
+  data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = a;
+}
+
+// Roughness maps stay near white so they multiply material.roughness instead of replacing it.
+const brushRough = procTex(512, 512, 7, (data, w, h, rnd) => {
+  for (let y = 0; y < h; y++) {
+    const line = 225 + Math.floor(rnd() * 30);
+    for (let x = 0; x < w; x++) {
+      const v = Math.max(0, Math.min(255, line + Math.floor((rnd() - 0.5) * 28)));
+      put(data, (y * w + x) * 4, v, v, v);
+    }
+  }
+}, { repeat: [4, 4] });
+
+const carbonMap = procTex(256, 256, 11, (data, w, h) => {
+  const cell = 4;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const u = Math.floor(x / cell), v = Math.floor(y / cell);
+    const twill = ((Math.floor(u / 2) + Math.floor(v / 2)) & 1) === 0;
+    const along = (twill ? x : y) % cell;
+    const thread = along < cell * 0.72;
+    const shade = (thread ? 255 : 205) - ((x * 3 + y) % 12);
+    put(data, (y * w + x) * 4, shade, shade, shade);
+  }
+}, { color: true, repeat: [8, 8] });
+const carbonBump = procTex(256, 256, 12, (data, w, h) => {
+  const cell = 4;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const u = Math.floor(x / cell), v = Math.floor(y / cell);
+    const twill = ((Math.floor(u / 2) + Math.floor(v / 2)) & 1) === 0;
+    const along = (twill ? x : y) % cell;
+    const thread = along < cell * 0.72;
+    const edge = along === 0 || along === Math.floor(cell * 0.72);
+    const shade = edge ? 40 : thread ? 230 : 90;
+    put(data, (y * w + x) * 4, shade, shade, shade);
+  }
+}, { repeat: [8, 8] });
+
+const beltFabric = procTex(256, 256, 21, (data, w, h, rnd) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const warp = (x % 4) < 2;
+    const weft = (y % 4) < 2;
+    const base = warp === weft ? 236 : 214;
+    const v = Math.max(0, Math.min(255, base + Math.floor((rnd() - 0.5) * 12)));
+    put(data, (y * w + x) * 4, v, v, v - 1);
+  }
+}, { color: true, repeat: [6, 2] });
+
+const epoxyMap = procTex(256, 256, 31, (data, w, h, rnd) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const n = rnd();
+    const speck = n > 0.92 ? 40 : n < 0.04 ? -30 : Math.floor((rnd() - 0.5) * 16);
+    const v = Math.max(0, Math.min(255, 232 + speck));
+    put(data, (y * w + x) * 4, v, v, v);
+  }
+}, { color: true, repeat: [8, 8] });
+
+const tapeMap = procTex(128, 128, 41, (data, w, h) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const stripe = (Math.floor((x + y) / 16) & 1) === 0;
+    if (stripe) put(data, (y * w + x) * 4, 240, 196, 0);
+    else put(data, (y * w + x) * 4, 18, 18, 18);
+  }
+}, { color: true, repeat: [2, 2] });
+
+// TubeGeometry: u runs along the path, so rings are vertical stripes.
+const ductRings = procTex(128, 32, 51, (data, w, h) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const rib = (x % 10) < 2;
+    const v = rib ? 245 : 110;
+    put(data, (y * w + x) * 4, v, v, v);
+  }
+}, { repeat: [8, 1] });
+
+const cardboardMap = procTex(256, 256, 61, (data, w, h, rnd) => {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const fiber = Math.sin((x * 0.35 + y * 0.05) + rnd() * 0.4);
+    const fleck = rnd() > 0.97 ? -50 : 0;
+    const v = Math.max(0, Math.min(255, 226 + fiber * 14 + fleck));
+    put(data, (y * w + x) * 4, v, Math.max(0, v - 8), Math.max(0, v - 18));
+  }
+}, { color: true, repeat: [2, 2] });
+
+const brushed = { roughnessMap: brushRough };
+const carbon = { map: carbonMap, bumpMap: carbonBump, bumpScale: 0.35 };
+const stainlessBrushed = phys(0xc8c6c2, 0.30, 1, brushed);
+const deck = phys(0xc8c6c2, 0.30, 1, { roughnessMap: brushRough });
+
+function floorIsDark() {
+  const t = document.documentElement.dataset.theme;
+  if (t === "dark") return true;
+  if (t === "light") return false;
+  return matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
 Object.assign(M, {
-  aluClear: mat(0xc9ccd0, 0.40, 1.0), aluBlasted: mat(0xbfc3c7, 0.55, 1.0), aluDark: mat(0x1c1d1f, 0.45, 0.4),
-  stainlessBrushed: mat(0xc8c6c2, 0.30, 1.0), steel: mat(0xd2d6db, 0.18, 1.0), chrome: mat(0xeceef0, 0.08, 1.0),
-  zinc9006: mat(0xa5a8a6, 0.5, 0.8), galv: mat(0xb4b8bb, 0.45, 0.9),
-  blackPlastic: mat(0x151515, 0.65, 0), blackRubber: mat(0x151515, 0.85, 0), whitePOM: mat(0xf2f1ec, 0.5, 0),
-  siliconeBlue: mat(0x2f7fd0, 0.6, 0), puBlue: mat(0x2a6fd6, 0.45, 0),
-  pcClear: mat(0xffffff, 0.05, 0, { transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide }),
-  sealBlack: mat(0x111111, 0.8, 0),
-  t3White: mat(0xeef0ef, 0.42, 0), t3Grey: mat(0xc4c8cc, 0.45, 0), t3Dark: mat(0x2e3236, 0.55, 0.1), duct: mat(0x3a3d42, 0.6, 0),
-  carbonGloss: mat(0x16181b, 0.3, 0.2), carbonMatte: mat(0x16181b, 0.55, 0.1), motorBlack: mat(0x18191b, 0.5, 0.3),
-  gearboxSilver: mat(0xb8bcc0, 0.35, 0.9), hoodSteel: mat(0xc8c6c2, 0.30, 1.0),
-  deck: mat(0xc8c6c2, 0.30, 1.0), beltPU: mat(0xf4f4f2, 0.8, 0), tunnelWhite: mat(0xe9ecef, 0.35, 0.2),
-  coldBlue: mat(0x9fd3f5, 0.4, 0, { emissive: 0x2b6c99, emissiveIntensity: 0.6 }),
-  floor: mat(0xb9bcbd, 0.55, 0), tape: mat(0xe8c22a, 0.6, 0), cabinet: mat(0xc8c6c2, 0.32, 1.0), nestPOM: mat(0xf2f1ec, 0.45, 0),
-  lampRed: mat(0x5a1010, 0.4, 0, { emissive: 0x000000 }), lampAmber: mat(0x5a3a08, 0.4, 0, { emissive: 0x000000 }),
-  lampGreen: mat(0x0d4a1a, 0.4, 0, { emissive: 0x000000 }),
-  estopRed: mat(0xc0201a, 0.4, 0), estopYellow: mat(0xf2c400, 0.5, 0),
-  screen: mat(0x0b0d10, 0.3, 0, { emissive: 0xffffff, emissiveIntensity: 0 }),
+  aluClear: phys(0xc9ccd0, 0.40, 1),
+  aluBlasted: phys(0xbfc3c7, 0.55, 1),
+  aluDark: phys(0x1c1d1f, 0.45, 0.4),
+  stainlessBrushed,
+  steel: phys(0xd2d6db, 0.18, 1),
+  chrome: phys(0xeceef0, 0.08, 1),
+  zinc9006: phys(0xa5a8a6, 0.5, 0.8),
+  galv: phys(0xb4b8bb, 0.45, 0.9),
+  blackPlastic: phys(0x151515, 0.65, 0),
+  blackRubber: phys(0x151515, 0.85, 0),
+  whitePOM: phys(0xf2f1ec, 0.5, 0),
+  siliconeBlue: phys(0x2f7fd0, 0.6, 0),
+  puBlue: phys(0x2a6fd6, 0.45, 0, { transmission: 0 }),
+  pcClear: phys(0xffffff, 0.05, 0, {
+    transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide,
+    clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 1.2,
+  }),
+  sealBlack: phys(0x111111, 0.8, 0),
+  t3White: phys(0xeef0ef, 0.42, 0, { clearcoat: 0.3, clearcoatRoughness: 0.35 }),
+  t3Grey: phys(0xc4c8cc, 0.45, 0),
+  t3Dark: phys(0x2e3236, 0.55, 0.1),
+  duct: phys(0x3a3d42, 0.6, 0.05, { bumpMap: ductRings, bumpScale: 0.45 }),
+  carbonGloss: phys(0x16181b, 0.35, 0.15, { ...carbon, clearcoat: 0.8, clearcoatRoughness: 0.18 }),
+  carbonMatte: phys(0x16181b, 0.55, 0.1, carbon),
+  motorBlack: phys(0x18191b, 0.5, 0.25),
+  gearboxSilver: phys(0xb8bcc0, 0.35, 0.9),
+  hoodSteel: stainlessBrushed,
+  deck,
+  beltPU: phys(0xf4f4f2, 0.8, 0, { map: beltFabric }),
+  tunnelWhite: phys(0xe9ecef, 0.35, 0.2),
+  coldBlue: phys(0x9fd3f5, 0.4, 0, { emissive: 0x2b6c99, emissiveIntensity: 0.6 }),
+  floor: phys(floorIsDark() ? 0x2a2b2c : 0xb9bcbd, 0.55, 0, { map: epoxyMap }),
+  tape: phys(0xffffff, 0.6, 0, { map: tapeMap }),
+  cabinet: phys(0xc8c6c2, 0.32, 1, { roughnessMap: brushRough }),
+  nestPOM: phys(0xf2f1ec, 0.45, 0),
+  lampRed: phys(0x5a1010, 0.4, 0, { emissive: 0xff2a2a, emissiveIntensity: 0 }),
+  lampAmber: phys(0x5a3a08, 0.4, 0, { emissive: 0xffb020, emissiveIntensity: 0 }),
+  lampGreen: phys(0x0d4a1a, 0.4, 0, { emissive: 0x3dff6a, emissiveIntensity: 0 }),
+  estopRed: phys(0xc0201a, 0.4, 0),
+  estopYellow: phys(0xf2c400, 0.5, 0),
+  screen: phys(0x0b0d10, 0.3, 0, { emissive: 0xffffff, emissiveIntensity: 0 }),
+  boxBody: phys(0x3a1f14, 0.75, 0.05, { map: cardboardMap }),
+  gold: phys(0xd4a83a, 0.3, 0.85),
+  cavity: phys(0x241209, 0.85, 0),
 });
+
+const FLAVOUR_MAT = {
+  dark: phys(0x2e170f, 0.30, 0.05, { clearcoat: 0.5, clearcoatRoughness: 0.25 }),
+  milk: phys(0x6e3f24, 0.35, 0.04, { clearcoat: 0.4, clearcoatRoughness: 0.28 }),
+  ruby: phys(0xa83a55, 0.35, 0.04, { clearcoat: 0.4, clearcoatRoughness: 0.28 }),
+};
+const BLOOM_MAT = {
+  dark: phys(0x8f8279, 0.9, 0),
+  milk: phys(0xa99282, 0.9, 0),
+  ruby: phys(0xcfa3ad, 0.9, 0),
+};
+
+function applyFloorTheme() {
+  M.floor.color.set(floorIsDark() ? 0x2a2b2c : 0xb9bcbd);
+}
+window.addEventListener("themechange", applyFloorTheme);
 function mesh(geo, m, parent = world) { const o = new THREE.Mesh(geo, m); o.castShadow = o.receiveShadow = true; parent.add(o); return o; }
 function box(w, d, h, m, x, y, z, parent) { const o = mesh(new THREE.BoxGeometry(w, d, h), m, parent); o.position.set(x, y, z); return o; }
 function vcyl(r, h, m, x, y, z, seg = 32, parent) { const o = mesh(new THREE.CylinderGeometry(r, r, h, seg), m, parent); o.rotation.x = Math.PI / 2; o.position.set(x, y, z); return o; }
@@ -859,13 +1181,28 @@ function rbox(w, d, h, r, m, x, y, z, parent) {
   const rr = Math.max(1e-5, Math.min(r, Math.min(w, d, h) / 2 - 1e-5));
   const o = mesh(new RoundedBoxGeometry(w, d, h, 4, rr), m, parent); o.position.set(x, y, z); return o;
 }
-const toShape = (pts) => (pts instanceof THREE.Shape ? pts : new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x, y))));
-// Extrusion of a closed outline over a total depth; a bevel keeps the outer size (bevelOffset = -bevel) and the total depth.
+const toShape = (pts) => (pts instanceof THREE.Shape ? pts : new THREE.Shape(pts.map((p) => new THREE.Vector2(p.x !== undefined ? p.x : p[0], p.y !== undefined ? p.y : p[1]))));
+// Move each outline point toward the centroid by `dist` so a later bevelSize brings the outside back to the requested size.
+function shrinkOutline(pts, dist) {
+  const list = pts instanceof THREE.Shape ? pts.getPoints(48) : pts;
+  const xy = list.map((p) => [p.x !== undefined ? p.x : p[0], p.y !== undefined ? p.y : p[1]]);
+  let cx = 0, cy = 0;
+  for (const [x, y] of xy) { cx += x; cy += y; }
+  cx /= xy.length; cy /= xy.length;
+  return xy.map(([x, y]) => {
+    const dx = cx - x, dy = cy - y, len = Math.hypot(dx, dy) || 1;
+    const t = Math.min(dist, len * 0.85);
+    return [x + (dx / len) * t, y + (dy / len) * t];
+  });
+}
+// Extrusion of a closed outline. bevel 0 keeps the T0 path: depth is the full span, no extra translate.
+// bevel > 0 shrinks the outline, rounds it back out, and keeps the span exact (bevel adds thickness on both ends).
 function extrudeShapeGeo(pts, depthTotal, bevel) {
-  const b = Math.max(0, Math.min(bevel || 0, depthTotal / 2 - 1e-5));
-  const geo = new THREE.ExtrudeGeometry(toShape(pts), { depth: depthTotal - 2 * b, bevelEnabled: b > 0, bevelThickness: b, bevelSize: b,
-    bevelOffset: -b, bevelSegments: 3, curveSegments: 24 });
-  geo.translate(0, 0, b);
+  const b = Math.max(0, Math.min(bevel || 0, depthTotal / 2 - 1e-4));
+  const geo = new THREE.ExtrudeGeometry(toShape(b > 0 ? shrinkOutline(pts, b) : pts), {
+    depth: depthTotal - 2 * b, bevelEnabled: b > 0, bevelThickness: b, bevelSize: b, bevelOffset: 0, bevelSegments: 3, curveSegments: 24,
+  });
+  if (b > 0) geo.translate(0, 0, b);
   return geo;
 }
 // Plan outline [[x, y], ...] (or a THREE.Shape) extruded from z0 to z1.
@@ -883,33 +1220,118 @@ function tubeGeo(pts, r, tub, rad) {
 }
 function tubeAlong(pts, r, m, parent, tub = 64, rad = 12) { const o = mesh(tubeGeo(pts, r, tub, rad), m, parent); o.userData.tube = { r, tub, rad }; return o; }
 function updateTube(o, pts) { const { r, tub, rad } = o.userData.tube; o.geometry.dispose(); o.geometry = tubeGeo(pts, r, tub, rad); }
-// 40x40 slot-8 aluminium profile between two points (static parents only). T0 stub: plain bar. G1: real section, instanced.
-const PROFILE_S = 0.040;
-function profileBeam(a, b, parent = world) {
-  const d = b.clone().sub(a), L = d.length();
-  const o = mesh(new THREE.BoxGeometry(PROFILE_S, PROFILE_S, L), M.aluClear, parent);
-  o.position.copy(a).addScaledVector(d, 0.5); o.quaternion.setFromUnitVectors(V(0, 0, 1), d.normalize());
+
+// 40x40 slot-8 section, metres. One unit-length extrusion, instanced with scale z = length.
+function profile4040Shape() {
+  const s = 0.001, r = 4;
+  const face = [[20, -4], [15.5, -4], [15.5, -8], [9.75, -8], [7.75, -6], [7.75, 6], [9.75, 8], [15.5, 8], [15.5, 4], [20, 4]];
+  const shape = new THREE.Shape();
+  for (let k = 0; k < 4; k++) {
+    const a = k * Math.PI / 2, c = Math.cos(a), si = Math.sin(a);
+    const R = ([x, y]) => [(x * c - y * si) * s, (x * si + y * c) * s];
+    const [cx, cy] = R([16, -16]);
+    if (k === 0) shape.moveTo(...R([16, -20]));
+    shape.absarc(cx, cy, r * s, a - Math.PI / 2, a, false);
+    for (const p of face) shape.lineTo(...R(p));
+    shape.lineTo(...R([20, 16]));
+  }
+  shape.closePath();
+  const hole = (x, y, rad) => { const p = new THREE.Path(); p.absarc(x * s, y * s, rad * s, 0, Math.PI * 2, true); return p; };
+  shape.holes.push(hole(0, 0, 3.4), hole(14, 14, 3), hole(-14, 14, 3), hole(-14, -14, 3), hole(14, -14, 3));
+  return shape;
+}
+const PROFILE_CAP = 800;
+const BOLT_CAP = 1500;
+const profileGeo = new THREE.ExtrudeGeometry(profile4040Shape(), { depth: 1, bevelEnabled: false, curveSegments: 3 });
+// ISO 7380 M8 button head: Ø14 mm × 4.4 mm, dome and a small chamfer, revolved about Y.
+const boltGeo = new THREE.LatheGeometry([
+  new THREE.Vector2(0, 0.0022), new THREE.Vector2(0.0048, 0.0022), new THREE.Vector2(0.0064, 0.0015),
+  new THREE.Vector2(0.007, 0.0006), new THREE.Vector2(0.007, -0.0015), new THREE.Vector2(0.0062, -0.0022), new THREE.Vector2(0, -0.0022),
+], 20);
+function makeInstanced(geo, material, cap, parent) {
+  const o = new THREE.InstancedMesh(geo, material, cap);
+  o.count = 0;
+  o.castShadow = o.receiveShadow = true;
+  o.frustumCulled = false;
+  o.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  parent.add(o);
   return o;
 }
-function finalizeProfiles() {}
-// ISO 7380 M8 button head (d 14 mm, h 4.4 mm) seated on a face with the given outward normal. T0 stub: one mesh per bolt.
-function addBolt(pos, normal, parent = world) {
-  const n = normal.clone().normalize(), o = mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.0044, 16), M.steel, parent);
-  o.position.copy(pos).addScaledVector(n, 0.0022); o.quaternion.setFromUnitVectors(V(0, 1, 0), n);
+const profiles = makeInstanced(profileGeo, M.aluClear, PROFILE_CAP, world);
+const bolts = makeInstanced(boltGeo, M.steel, BOLT_CAP, world);
+const extraProfiles = new Map();
+const extraBolts = new Map();
+function pooledMesh(map, parent, geo, material, cap) {
+  let o = map.get(parent);
+  if (!o) { o = makeInstanced(geo, material, cap, parent); map.set(parent, o); }
   return o;
+}
+const _beamQ = new THREE.Quaternion();
+const _beamS = new THREE.Vector3();
+const _beamM = new THREE.Matrix4();
+const _beamD = new THREE.Vector3();
+const _zAxis = V(0, 0, 1);
+const _boltP = new THREE.Vector3();
+const _boltN = new THREE.Vector3();
+let profileWarned = false, boltWarned = false;
+// 40x40 slot-8 beam from a to b, in the parent's local frame. Ends are bare; cap them at the call site.
+// One InstancedMesh per parent so a later rigid move (a robot root) carries its beams.
+function profileBeam(a, b, parent = world) {
+  const pool = parent === world ? profiles : pooledMesh(extraProfiles, parent, profileGeo, M.aluClear, PROFILE_CAP);
+  _beamD.subVectors(b, a);
+  const L = _beamD.length();
+  if (L < 1e-6) return pool;
+  if (pool.count >= PROFILE_CAP) { if (!profileWarned) { profileWarned = true; console.warn("profileBeam: capacity", PROFILE_CAP); } return pool; }
+  _beamD.multiplyScalar(1 / L);
+  _beamQ.setFromUnitVectors(_zAxis, _beamD);
+  _beamS.set(1, 1, L);
+  _beamM.compose(a, _beamQ, _beamS);
+  pool.setMatrixAt(pool.count, _beamM);
+  pool.count += 1;
+  return pool;
+}
+let profilesFinal = false;
+function finalizeProfiles() {
+  if (profilesFinal) return;
+  profilesFinal = true;
+  profiles.instanceMatrix.needsUpdate = true;
+  bolts.instanceMatrix.needsUpdate = true;
+  extraProfiles.forEach((o) => { o.instanceMatrix.needsUpdate = true; });
+  extraBolts.forEach((o) => { o.instanceMatrix.needsUpdate = true; });
+}
+// ISO 7380 M8 button head seated on the face. `normal` points out of the face. The head centre sits 2.2 mm out.
+function addBolt(pos, normal, parent = world) {
+  const pool = parent === world ? bolts : pooledMesh(extraBolts, parent, boltGeo, M.steel, BOLT_CAP);
+  if (pool.count >= BOLT_CAP) { if (!boltWarned) { boltWarned = true; console.warn("addBolt: capacity", BOLT_CAP); } return pool; }
+  _boltN.copy(normal);
+  if (_boltN.lengthSq() < 1e-12) _boltN.copy(_zAxis); else _boltN.normalize();
+  _beamQ.setFromUnitVectors(UP, _boltN);
+  _boltP.copy(pos).addScaledVector(_boltN, 0.0022);
+  _beamS.set(1, 1, 1);
+  _beamM.compose(_boltP, _beamQ, _beamS);
+  pool.setMatrixAt(pool.count, _beamM);
+  pool.count += 1;
+  return pool;
 }
 // Sticker / tag: a plane facing +z with centred text. Not added to the scene; the caller places and rotates it.
 function labelPlane(text, w, h, opts = {}) {
   const { bg = "#ffffff", fg = "#111111", font = "600 140px 'IBM Plex Sans', sans-serif", px = 256 } = opts;
   const c = document.createElement("canvas"); c.height = px; c.width = Math.max(px, Math.round(px * w / h));
-  const g = c.getContext("2d"); g.fillStyle = bg; g.fillRect(0, 0, c.width, c.height);
+  const g = c.getContext("2d");
+  g.fillStyle = bg; g.fillRect(0, 0, c.width, c.height);
+  g.globalAlpha = 0.07;
+  for (let i = 0; i < 500; i++) {
+    const v = Math.floor(Math.random() * 90);
+    g.fillStyle = `rgb(${v},${v},${v})`;
+    g.fillRect(Math.random() * c.width, Math.random() * c.height, 2, 1);
+  }
+  g.globalAlpha = 1;
   g.fillStyle = fg; g.font = font; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(text, c.width / 2, c.height / 2);
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-  const o = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6 }));
+  const o = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.75 }));
   o.receiveShadow = true;
   return o;
 }
-
 // ================================================================ shared 3D layout (metres, z up, deck top z = 0). Read-only for every task (plan §4.1).
 const LAYOUT = {
   floor: -0.86,                                    // floor level (working height 860 mm)
@@ -1291,10 +1713,10 @@ function buildT3(sd) {
   t3Cylinder(0.006, 0.389, 0.395, M.t3Dark, 0.110, 0.022, j2);
   const quill = new THREE.Group(); world.add(quill);
   t3Cylinder(0.008, T3G.tool, T3G.tool + T3G.shaftLen, t3ShaftMaterial, 0, 0, quill);
-  t3Cylinder(0.015, 0.4157, 0.4277, M.steel, 0, 0, quill);
-  t3Cylinder(0.015, 0.105, 0.115, M.steel, 0, 0, quill);
+  t3Cylinder(0.015, T3G.tool + T3G.shaftLen - 0.012, T3G.tool + T3G.shaftLen, M.steel, 0, 0, quill);   // upper stop collar at the shaft top
+  t3Cylinder(0.015, T3G.tool + 0.030, T3G.tool + 0.040, M.steel, 0, 0, quill);                         // lower mechanical stop, 30 mm above the shaft end
   const gripper = new THREE.Group(); quill.add(gripper);
-  t3Cylinder(0.016, 0.055, 0.075, M.aluDark, 0, 0, gripper);
+  t3Cylinder(0.016, 0.055, T3G.tool, M.aluDark, 0, 0, gripper);                                         // split-muff coupling up to the shaft end
   rbox(0.034, 0.046, 0.030, 0.003, M.aluDark, 0, 0, 0.040, gripper);
   rbox(0.010, 0.050, 0.006, 0.0015, M.aluDark, 0, 0, 0.025, gripper);
   for (const y of [-0.012, 0.012]) { const f = t3Cylinder(0.003, 0, 0.010, M.puBlue, 0, 0, gripper); f.rotation.y = Math.PI / 2; f.position.set(0.017, y, 0.045); }
@@ -1330,6 +1752,95 @@ function t3Check() {
   return maxMM;
 }
 window.pcHooks = Object.assign(window.pcHooks || {}, { t3Check });
+
+// Optional official CAD: never requested from public hosts or with ?cad=0.
+function restoreProceduralT3() {
+  for (const m of t3Models) {
+    if (m.cad) { Object.values(m.cad).forEach((o) => o.removeFromParent()); delete m.cad; }
+    Object.values(m.proc).flat().forEach((o) => { o.visible = true; });
+  }
+  document.getElementById("t3-cad-badge")?.remove();
+}
+function cadCheck() {
+  if (!t3Models.every((m) => m.cad)) return null; // No CAD is not a successful CAD check.
+  world.updateWorldMatrix(true, true);
+  let maxMM = 0;
+  for (const m of t3Models) {
+    const centre = world.worldToLocal(m.cad.shaft.localToWorld(V(0, -0.15, 0)));
+    const q = [m.j1.rotation.z, m.j2.rotation.z, m.quill.position.z, 0];
+    const expected = t3FK(m.sd, q).j3;
+    const mm = Math.hypot(centre.x - expected[0], centre.y - expected[1]) * 1000;
+    maxMM = Number.isFinite(mm) ? Math.max(maxMM, mm) : Infinity;
+  }
+  if (maxMM > 2) {
+    console.warn("[praline] CAD shaft alignment failed (mm):", maxMM, "— using procedural T3");
+    restoreProceduralT3();
+  }
+  return maxMM;
+}
+async function tryLoadCadT3() {
+  if (!["localhost", "127.0.0.1"].includes(location.hostname) || new URLSearchParams(location.search).get("cad") === "0") return;
+  try {
+    if (!(await fetch("_cad/t3.glb", { method: "HEAD" })).ok) return;
+    const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
+    const gltf = await new GLTFLoader().loadAsync("_cad/t3.glb");
+    const specs = [
+      ["NAUO1", "base", "root", [-0.145, 0, 0]],
+      ["NAUO2", "arm1", "j1", [0, 0, 0.1923]],
+      ["NAUO3", "arm2", "j2", [0.175, 0, 0.2392]],
+      ["NAUO4", "shaft", "quill", [0, 0, T3G.tool + 0.32]],
+      ["NAUO5", "cable", "j1", [0, 0, 0.4103]],
+    ];
+    for (const [name, part] of specs) {
+      const nodes = gltf.parser.json.nodes.filter((n) => n.name === name);
+      if (nodes.length !== 1 || gltf.parser.json.meshes[nodes[0].mesh]?.name !== `T3-401S_${part}`) throw new Error(`Unexpected CAD node/mesh: ${name}/${part}`);
+    }
+    const materials = { mat_0: M.t3White, mat_1: M.lampAmber, mat_2: M.t3Grey, mat_3: M.t3Dark, mat_4: M.puBlue, mat_5: M.chrome };
+    // Stage both robots before changing visibility; a malformed asset leaves the fallback intact.
+    const prepared = t3Models.map((m) => {
+      const scene = gltf.scene.clone(true), cad = {};
+      for (const [name, part, parent, position] of specs) {
+        const object = scene.getObjectByName(name);
+        if (!object) throw new Error(`Missing CAD object: ${name}`);
+        let meshes = 0;
+        object.traverse((o) => {
+          if (!o.isMesh) return;
+          meshes++;
+          const mapped = (material) => {
+            if (!materials[material.name]) throw new Error(`Unknown CAD material: ${material.name}`);
+            return materials[material.name];
+          };
+          o.material = Array.isArray(o.material) ? o.material.map(mapped) : mapped(o.material);
+          o.castShadow = o.receiveShadow = true;
+        });
+        if (!meshes) throw new Error(`Empty CAD object: ${name}`);
+        object.matrixAutoUpdate = true;
+        object.position.set(...position);
+        object.quaternion.setFromAxisAngle(V(1, 0, 0), Math.PI / 2);
+        object.scale.set(1, 1, 1); object.updateMatrix();
+        cad[part] = object;
+      }
+      return { m, cad };
+    });
+    for (const { m, cad } of prepared) {
+      m.cad = cad;
+      for (const [, part, parent] of specs) m[parent].add(cad[part]);
+    }
+    const errorMM = cadCheck();
+    if (errorMM === null || errorMM > 2) return;
+    for (const m of t3Models) Object.values(m.proc).flat().forEach((o) => { o.visible = false; });
+    const badge = document.createElement("span"); badge.id = "t3-cad-badge"; badge.textContent = "CAD (local)";
+    badge.style.cssText = "font-size:11px;padding:4px 8px;border:1px solid currentColor;border-radius:4px;white-space:nowrap";
+    document.querySelector("header")?.appendChild(badge);
+  } catch (error) {
+    restoreProceduralT3();
+    console.warn("[praline] Local CAD unavailable — using procedural T3:", error);
+  }
+}
+window.pcHooks = Object.assign(window.pcHooks || {}, { cadCheck });
+// The loop publishes pc later in this same module; keep this hook usable before G4's hook integration.
+queueMicrotask(() => { if (window.pc) window.pc.cadCheck = cadCheck; });
+tryLoadCadT3();
 // paths
 function pathLine(points, colorVar) {
   const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(points.flat()), 3));
