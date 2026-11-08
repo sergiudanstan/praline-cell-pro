@@ -23,11 +23,11 @@ node tools/shots.mjs           # stills, console errors, frames per second
 node tools/record.mjs          # cycle films (see below)
 ```
 
-## Local CAD mode
+## CAD robots
 
-On `localhost` the SCARA arms can be replaced by a local CAD model. That model is not Epson's CAD file and it is not in this repository. Epson and T3-401S are trademarks of their owners. The public page always shows the procedural robots.
+The public page loads `cad/t3.glb` onto both SCARA arms. Add `?cad=0` to keep the procedural robots. Epson and T3-401S are trademarks of their owners.
 
-See [tools/cad/README.md](tools/cad/README.md) for the local download and conversion. The public film is `praline_cell_pro.mp4` (`?cad=0`). A second film, `praline_cell_pro_cad_local.mp4`, is produced only when `_cad/t3.glb` is present on the machine that runs `tools/record.mjs`, and it is not published.
+See [tools/cad/README.md](tools/cad/README.md) for how the display model is produced. The original STEP download stays out of git. The public film is `praline_cell_pro.mp4` (`?cad=0`). `praline_cell_pro_cad_local.mp4` is produced only when `_cad/t3.glb` is present on the machine that runs `tools/record.mjs`, and it is not in the repository.
 
 ## Layout
 

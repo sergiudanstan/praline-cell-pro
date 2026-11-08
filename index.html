@@ -2256,7 +2256,7 @@ function t3Check() {
 }
 window.pcHooks = Object.assign(window.pcHooks || {}, { t3Check });
 
-// Optional official CAD: never requested from public hosts or with ?cad=0.
+// Display CAD from cad/t3.glb on any host. ?cad=0 keeps the procedural robots.
 function restoreProceduralT3() {
   for (const m of t3Models) {
     if (m.cad) { Object.values(m.cad).forEach((o) => o.removeFromParent()); delete m.cad; }
@@ -2282,11 +2282,12 @@ function cadCheck() {
   return maxMM;
 }
 async function tryLoadCadT3() {
-  if (!["localhost", "127.0.0.1"].includes(location.hostname) || new URLSearchParams(location.search).get("cad") === "0") return;
+  if (new URLSearchParams(location.search).get("cad") === "0") return;
+  const url = "cad/t3.glb";
   try {
-    if (!(await fetch("_cad/t3.glb", { method: "HEAD" })).ok) return;
+    if (!(await fetch(url, { method: "HEAD" })).ok) return;
     const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
-    const gltf = await new GLTFLoader().loadAsync("_cad/t3.glb");
+    const gltf = await new GLTFLoader().loadAsync(url);
     const specs = [
       ["NAUO1", "base", "root", [-0.145, 0, 0]],
       ["NAUO2", "arm1", "j1", [0, 0, 0.1923]],
@@ -2332,12 +2333,12 @@ async function tryLoadCadT3() {
     const errorMM = cadCheck();
     if (errorMM === null || errorMM > 2) return;
     for (const m of t3Models) Object.values(m.proc).flat().forEach((o) => { o.visible = false; });
-    const badge = document.createElement("span"); badge.id = "t3-cad-badge"; badge.textContent = "CAD (local)";
+    const badge = document.createElement("span"); badge.id = "t3-cad-badge"; badge.textContent = "CAD";
     badge.style.cssText = "font-size:11px;padding:4px 8px;border:1px solid currentColor;border-radius:4px;white-space:nowrap";
     document.querySelector("header")?.appendChild(badge);
   } catch (error) {
     restoreProceduralT3();
-    console.warn("[praline] Local CAD unavailable — using procedural T3:", error);
+    console.warn("[praline] CAD unavailable — using procedural T3:", error);
   }
 }
 window.pcHooks = Object.assign(window.pcHooks || {}, { cadCheck });
