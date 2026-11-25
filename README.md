@@ -1,5 +1,10 @@
 # Praline Cell Pro
 
+[![CI](https://github.com/sergiudanstan/praline-cell-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/sergiudanstan/praline-cell-pro/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/sergiudanstan/praline-cell-pro/actions/workflows/codeql.yml/badge.svg)](https://github.com/sergiudanstan/praline-cell-pro/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/sergiudanstan/praline-cell-pro/badge)](https://scorecard.dev/viewer/?uri=github.com/sergiudanstan/praline-cell-pro)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A browser digital twin of an artisan praline packing cell. A delta robot picks pralines from the belt as they leave the cooling tunnel and places each one in one of two nests. Two SCARA robots, one on each side, take a praline from their nest, inspect it over a camera, and place it in a gift box according to the recipe. Pralines that fail inspection go to a reject bin. A full box leaves on its exit belt.
 
 **Live:** https://sergiudanstan.github.io/praline-cell-pro/
@@ -32,3 +37,17 @@ See [tools/cad/README.md](tools/cad/README.md) for how the display model is prod
 ## Layout
 
 `src/page.html` is the shell. `src/js/*.js` are concatenated in lexical order into one module by `tools/build.mjs`. `index.html` is generated. Do not edit it by hand.
+
+## Development
+
+```sh
+npm ci --ignore-scripts      # test tooling only (playwright-core); the page has no npm dependencies
+npm run build                # regenerate index.html from src/ (CI fails if the committed index.html differs)
+npm test                     # cell logic checks (node tests/run.mjs)
+npm run test:perturb         # must FAIL: proves the checks can fail
+npm run test:smoke           # load index.html in headless Chrome, fail on any page error
+```
+
+Edit `src/`, run `npm run build`, and commit `index.html` together with the source change.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [CHANGELOG.md](CHANGELOG.md).
